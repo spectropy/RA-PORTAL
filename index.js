@@ -6,42 +6,67 @@ import * as XLSX from 'xlsx';
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
 
+// =========================
+// 🔧 Configuration & Setup
+// =========================
+
 const PORT = process.env.PORT || 4000;
+
+// Clean Supabase URL (remove trailing slashes)
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 
+// Validate required environment variables
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error('❌ Missing Supabase env vars. Check .env');
-  process.exit(1);
-}
-try {
-  new URL(SUPABASE_URL);
-} catch (e) {
-  console.error(`❌ Invalid SUPABASE_URL: "${process.env.SUPABASE_URL}"`);
+  console.error('❌ Missing Supabase env vars. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY');
   process.exit(1);
 }
 
-// Supabase client with service role key (full access)
+// Validate URL format
+try {
+  new URL(SUPABASE_URL);
+} catch (e) {
+  console.error(`❌ Invalid SUPABASE_URL: "${SUPABASE_URL}"`);
+  process.exit(1);
+}
+
+// Supabase client (service_role = full access)
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
+// =========================
+// 🌐 Express App & Middleware
+// =========================
+
 const app = express();
 
-// Enable CORS for frontend (adjust origin in production)
+// Determine allowed origin
+const FRONTEND_URL = process.env.FRONTEND_URL
+  ? process.env.FRONTEND_URL.trim().replace(/\/+$/, '')
+  : 'http://localhost:3000';
+
+// Enable CORS for specific origin
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    origin: FRONTEND_URL,
     credentials: true,
   })
 );
 
+// Handle preflight requests (important for CORS)
+app.options('*', cors());
+
+// Parse JSON bodies
 app.use(express.json({ limit: '5mb' }));
 
-// Multer for file upload
+// Multer for file uploads (in memory)
 const upload = multer({ storage: multer.memoryStorage() });
 
-// ====== Constants & Helpers ======
+// =========================
+// 🌍 Constants & Helpers
+// =========================
+
 const STATES = {
   "Andhra Pradesh": "AP", "Arunachal Pradesh": "AR", "Assam": "AS", "Bihar": "BR",
   "Chhattisgarh": "CG", "Goa": "GA", "Gujarat": "GJ", "Haryana": "HR", "Himachal Pradesh": "HP",
@@ -69,8 +94,11 @@ function deriveSchoolId({ state, academic_year, school_number_2d }) {
   return `${abbr}${yy}${nn}`;
 }
 
-// ====== Routes ======
+// =========================
+// 🛠️ Routes
+// =========================
 
+// Health check
 app.get('/', (req, res) => {
   res.json({ ok: true, name: 'SPECTROPY School Portal Backend' });
 });
@@ -79,7 +107,7 @@ app.get('/health', (req, res) => {
   res.status(200).send('ok');
 });
 
-// GET /api/schools - List all schools from the view
+// GET /api/schools - List all schools
 app.get('/api/schools', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -94,31 +122,28 @@ app.get('/api/schools', async (req, res) => {
 
     res.json({ data });
   } catch (err) {
-    console.error('Server error:', err);
+    console.error('Server error in /api/schools:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// POST /api/schools - Create full school with classes & teachers
+// POST /api/schools - Create full school
 app.post('/api/schools', async (req, res) => {
   const {
     school_name, state, academic_year, area, district,
     school_number_2d, classes = [], teachers = []
   } = req.body || {};
 
-  // Validate required fields
   if (!school_name || !state || !academic_year || !school_number_2d) {
     return res.status(400).json({
       error: 'Missing required fields: school_name, state, academic_year, school_number_2d'
     });
   }
 
-  // Validate state
   if (!STATES[state]) {
     return res.status(400).json({ error: `Invalid state: ${state}` });
   }
 
-  // Derive SCHOOL_ID
   const school_id = deriveSchoolId({ state, academic_year, school_number_2d });
   if (!school_id) {
     return res.status(400).json({ error: 'Invalid school_id derivation (check state/year/number)' });
@@ -147,7 +172,6 @@ app.post('/api/schools', async (req, res) => {
       return res.status(500).json({ error: rpcError.message });
     }
 
-    // Fetch the created school from the view
     const { data, error } = await supabase
       .from('school_list')
       .select('*')
@@ -224,7 +248,7 @@ app.post('/api/upload-schools', upload.single('file'), async (req, res) => {
     if (batch.length > 0) {
       const { data, error } = await supabase
         .from('schools')
-        .upsert(batch, { onConflict: 'school_id', ignoreDuplicates: false }); // update on conflict
+        .upsert(batch, { onConflict: 'school_id', ignoreDuplicates: false });
 
       if (error) throw error;
       inserted = batch.length;
@@ -238,7 +262,20 @@ app.post('/api/upload-schools', upload.single('file'), async (req, res) => {
   }
 });
 
+// =========================
+// 🚨 404 Catch-All (Must be last)
+// =========================
+
+app.use((req, res) => {
+  res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` });
+});
+
+// =========================
+// ▶️ Start Server
+// =========================
+
 app.listen(PORT, () => {
   console.log(`✅ Backend running on http://localhost:${PORT}`);
-  console.log(`📌 Connects to Supabase: ${SUPABASE_URL}`);
+  console.log(`📌 Connected to Supabase: ${SUPABASE_URL}`);
+  console.log(`🌐 CORS enabled for: ${FRONTEND_URL}`);
 });
