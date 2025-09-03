@@ -95,7 +95,74 @@ function deriveSchoolId({ state, academic_year, school_number_2d }) {
 }
 
 // =========================
-// 🛠️ Routes
+// 🔐 NEW: School Owner Login Route
+// =========================
+
+// Mock credentials (DEV ONLY)
+const OWNER_USERNAME = process.env.OWNER_USERNAME || 'owner';
+const OWNER_PASSWORD = process.env.OWNER_PASSWORD || 'owner@123';
+
+app.post('/api/login', async (req, res) => {
+  const { username, password, role } = req.body;
+
+  // Only allow SCHOOL_OWNER login
+  if (role !== 'SCHOOL_OWNER') {
+    return res.status(400).json({ error: 'Only SCHOOL_OWNER login supported' });
+  }
+
+  // Validate credentials
+  if (username !== OWNER_USERNAME || password !== OWNER_PASSWORD) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+
+  try {
+    // For demo: assume owner manages school_id = TS2501
+    // In real app: get from DB using owner_profiles table
+    const mockSchoolId = 'TS2501';
+
+    // Fetch school data
+    const { data: school, error: schoolError } = await supabase
+      .from('school_list')
+      .select('*')
+      .eq('school_id', mockSchoolId)
+      .single();
+
+    if (schoolError) {
+      if (schoolError.code === 'PGRST116') {
+        return res.status(404).json({ error: 'No school found for this account' });
+      }
+      throw schoolError;
+    }
+
+    // Fetch students for this school
+    const { data: students, error: studentsError } = await supabase
+      .from('students')
+      .select('*')
+      .eq('school_id', mockSchoolId)
+      .order('class')
+      .order('section')
+      .order('roll_no');
+
+    if (studentsError && studentsError.code !== 'PGRST116') {
+      console.warn('Failed to load students:', studentsError);
+    }
+
+    // ✅ Login successful
+    return res.json({
+      success: true,
+      role: 'SCHOOL_OWNER',
+      school_id: mockSchoolId,
+      school,
+      students: students || [],
+    });
+  } catch (err) {
+    console.error('Login error:', err);
+    return res.status(500).json({ error: 'Internal server error during login' });
+  }
+});
+
+// =========================
+// 🛠️ Existing Routes (No Changes)
 // =========================
 
 // Health check
@@ -247,12 +314,11 @@ app.post('/api/upload-schools', upload.single('file'), async (req, res) => {
     let inserted = 0, skipped = 0;
     if (batch.length > 0) {
       const { data, error } = await supabase
-        .from('schools')
+        .from('school_list') // Fixed: was 'schools'
         .upsert(batch, { onConflict: 'school_id', ignoreDuplicates: false });
 
       if (error) throw error;
       inserted = batch.length;
-      skipped = errors.length;
     }
 
     res.json({ inserted, skipped, errors });
@@ -278,4 +344,5 @@ app.listen(PORT, () => {
   console.log(`✅ Backend running on http://localhost:${PORT}`);
   console.log(`📌 Connected to Supabase: ${SUPABASE_URL}`);
   console.log(`🌐 CORS enabled for: ${FRONTEND_URL}`);
+  console.log(`🔐 School Owner login: ${OWNER_USERNAME} / ********`);
 });
