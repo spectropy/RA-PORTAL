@@ -1,3 +1,5 @@
+//SCHOOLCONTROLLERS.JSX 
+
 // server/controllers/schoolController.js
 import { createClient } from '@supabase/supabase-js';
 
