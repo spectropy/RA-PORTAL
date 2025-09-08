@@ -1,5 +1,3 @@
-//SCHOOLCONTROLLERS.JSX 
-
 // server/controllers/schoolController.js
 import { createClient } from '@supabase/supabase-js';
 
@@ -113,11 +111,11 @@ export const createSchool = async (req, res) => {
 };
 
 // ✅ GET /api/schools/:school_id - Get full school details with classes & teachers
+// ✅ GET /api/schools/:school_id - full details
 export const getSchoolById = async (req, res) => {
   const { school_id } = req.params;
 
   try {
-    // Get school base info
     const { data: school, error: schoolError } = await supabase
       .from('schools')
       .select('*')
@@ -128,46 +126,114 @@ export const getSchoolById = async (req, res) => {
       return res.status(404).json({ error: 'School not found' });
     }
 
-    // Get classes — ⚠️ Quote "group" (reserved SQL keyword)
     const { data: classes, error: classesError } = await supabase
       .from('classes')
       .select('class, foundation, program, "group", section, num_students')
       .eq('school_id', school_id)
-      .order('class')
-      .order('section');
+      .order('class', { ascending: true })
+      .order('section', { ascending: true });
 
-    if (classesError && classesError.code !== 'PGRST116') {
-      console.warn('Failed to load classes:', classesError);
+    if (classesError) {
+      console.warn('Classes load error:', classesError);
     }
 
-    // Get teachers with assignments
-    const { data: teachers, error: teachersError } = await supabase
+    const { data: rawTeachers, error: teachersError } = await supabase
       .from('teachers')
-      .select(`
-        id,
-        name,
-        contact,
-        email,
-        teacher_assignments (
-          class,
-          section,
-          subject
-        )
-      `)
+      .select('id, teacherId:teacher_id, name, contact, email') 
       .eq('school_id', school_id);
 
-    if (teachersError && teachersError.code !== 'PGRST116') {
-      console.warn('Failed to load teachers:', teachersError);
+    if (teachersError) {
+      console.warn('Teachers load error:', teachersError);
     }
 
-    // ✅ Return full school data
+    let assignmentsMap = {};
+    if (rawTeachers?.length) {
+      const teacherRowIds = rawTeachers.map(t => t.id); // UUIDs
+      const { data: assignments, error: assignmentsError } = await supabase
+        .from('teacher_assignments')
+        .select('teacher_id, class, section, subject')
+        .in('teacher_id', teacherRowIds);
+
+      if (!assignmentsError && assignments) {
+        for (const a of assignments) {
+          (assignmentsMap[a.teacher_id] ||= []).push({
+            class: a.class,
+            section: a.section,
+            subject: a.subject
+          });
+        }
+      } else if (assignmentsError) {
+        console.warn('Assignments load error:', assignmentsError);
+      }
+    }
+
+    const teachers = (rawTeachers || []).map(t => ({
+      ...t,
+      teacher_assignments: assignmentsMap[t.id] || []
+    }));
+
     return res.json({
       school,
       classes: classes || [],
-      teachers: teachers || []
+      teachers
     });
   } catch (err) {
     console.error('Get school by ID error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+
+// ✅ DELETE /api/schools/:school_id - Delete school and all associated classes & teachers
+export const deleteSchool = async (req, res) => {
+  const { school_id } = req.params;
+
+  if (!school_id) {
+    return res.status(400).json({ error: 'school_id is required' });
+  }
+
+  try {
+    // 1. Delete all teachers for this school
+    const { error: teachersDeleteError } = await supabase
+      .from('teachers')
+      .delete()
+      .eq('school_id', school_id);
+
+    if (teachersDeleteError) {
+      console.error('Failed to delete teachers:', teachersDeleteError);
+      return res.status(500).json({ error: 'Failed to delete teachers' });
+    }
+
+    // 2. Delete all classes for this school
+    const { error: classesDeleteError } = await supabase
+      .from('classes')
+      .delete()
+      .eq('school_id', school_id);
+
+    if (classesDeleteError) {
+      console.error('Failed to delete classes:', classesDeleteError);
+      return res.status(500).json({ error: 'Failed to delete classes' });
+    }
+
+    // 3. Delete the school
+    const { error: schoolDeleteError } = await supabase
+      .from('schools')
+      .delete()
+      .eq('school_id', school_id);
+
+    if (schoolDeleteError) {
+      console.error('Failed to delete school:', schoolDeleteError);
+      return res.status(500).json({ error: 'Failed to delete school' });
+    }
+
+    // ✅ Success
+    return res.status(200).json({
+      message: `School ${school_id} and all associated data deleted successfully.`,
+      school_id
+    });
+
+  } catch (err) {
+    console.error('Delete school error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
