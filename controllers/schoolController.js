@@ -365,61 +365,83 @@ export const assignTeacherToClass = async (req, res) => {
   }
 };
 
-// ✅ POST /api/schools/:school_id/students/upload - Upload students
 export const uploadStudents = async (req, res) => {
-  const { school_id } = req.params;
-  const { class_section } = req.body;
-
-  if (!school_id) {
-    return res.status(400).json({ error: 'school_id is required' });
-  }
-
-  if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded' });
-  }
+  console.log('🚀 [STUDENT UPLOAD] REQUEST RECEIVED');
+  console.log('📁 File:', req.file ? { name: req.file.originalname, size: req.file.size } : 'MISSING');
+  console.log('📦 Body:', req.body);
+  console.log('🏫 School ID:', req.params.school_id);
 
   try {
-    // Verify school exists
+    const { school_id } = req.params;
+    const { class_section } = req.body;
+
+    // VALIDATE INPUTS
+    if (!school_id) {
+      console.error('❌ Validation failed: school_id is required');
+      return res.status(400).json({ error: 'school_id is required' });
+    }
+    if (!class_section) {
+      console.error('❌ Validation failed: class_section is required');
+      return res.status(400).json({ error: 'class_section is required' });
+    }
+    if (!req.file) {
+      console.error('❌ Validation failed: No file uploaded');
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    // VERIFY SCHOOL EXISTS
+    console.log('🔍 Fetching school record...');
     const { data: school, error: schoolError } = await supabase
       .from('schools')
-      .select('school_id')
+      .select('school_id, academic_year')
       .eq('school_id', school_id)
       .single();
 
     if (schoolError || !school) {
+      console.error('❌ School not found:', schoolError?.message || 'No record');
       return res.status(404).json({ error: 'School not found' });
     }
+    console.log('✅ School record:', school);
 
-    // Parse the file based on extension
+    // PARSE FILE
+    console.log('📊 Parsing file:', req.file.originalname);
     let records = [];
-    const fileBuffer = req.file.buffer;
+    const buffer = req.file.buffer;
     const filename = req.file.originalname.toLowerCase();
 
-    if (filename.endsWith('.csv')) {
-      // For CSV files
-      const { parse } = await import('csv-parse/sync');
-      records = parse(fileBuffer.toString('utf-8'), {
-        columns: true,
-        skip_empty_lines: true
-      });
-    } else if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
-      // For Excel files
-      const XLSX = await import('xlsx');
-      const workbook = XLSX.read(fileBuffer);
-      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-      records = XLSX.utils.sheet_to_json(worksheet);
-    } else {
-      return res.status(400).json({ error: 'Unsupported file format. Please upload CSV or Excel file.' });
+    try {
+      if (filename.endsWith('.csv')) {
+        console.log('📄 Parsing CSV...');
+        const { parse } = await import('csv-parse/sync');
+        records = parse(buffer.toString('utf-8'), {
+          columns: true,
+          skip_empty_lines: true,
+          relax_column_count: true
+        });
+      } else if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
+        console.log('📄 Parsing Excel...');
+        const XLSX = await import('xlsx');
+        const workbook = XLSX.read(buffer, { type: 'buffer' });
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        records = XLSX.utils.sheet_to_json(worksheet, { defval: null });
+      } else {
+        console.error('❌ Unsupported file format');
+        return res.status(400).json({ error: 'Unsupported file. Use CSV, XLSX, or XLS.' });
+      }
+    } catch (parseError) {
+      console.error('💥 File parse error:', parseError.message);
+      return res.status(400).json({ error: 'Invalid file format or corrupted file' });
     }
 
-    if (!records || records.length === 0) {
+    console.log('📈 Records parsed:', records.length);
+    if (!records.length) {
+      console.error('❌ No data in file');
       return res.status(400).json({ error: 'No data found in file' });
     }
 
-    // Extract class and section from class_section (format: "Class-Section")
+    // EXTRACT CLASS & SECTION
     let classValue = '';
     let sectionValue = '';
-    
     if (class_section) {
       const parts = class_section.split('-');
       if (parts.length >= 2) {
@@ -427,61 +449,74 @@ export const uploadStudents = async (req, res) => {
         sectionValue = parts[1];
       }
     }
+    console.log('🏷️ Class/Section:', { classValue, sectionValue });
 
-    // Get academic year from school
-    const { data: schoolData, error: schoolDataError } = await supabase
-      .from('schools')
-      .select('academic_year')
-      .eq('school_id', school_id)
-      .single();
+    // MAP RECORDS TO STUDENTS
+    console.log('🧑‍🎓 Mapping student records...');
+    const studentsData = records
+      .map((record, index) => {
+        console.log(`📄 Record ${index + 1}:`, record);
+        return {
+          school_id: school_id,
+          student_id: record['Student ID'] || record['student_id'] || null,
+          first_name: (record['First Name'] || record['first_name'] || '').trim(),
+          last_name: (record['Last Name'] || record['last_name'] || '').trim(),
+          date_of_birth: record['Date of Birth'] || record['date_of_birth'] || null,
+          gender: record['Gender'] || record['gender'] || null,
+          parent_name: record['Parent Name'] || record['parent_name'] || null,
+          parent_phone: record['Parent Phone'] || record['parent_phone'] || null,
+          parent_email: record['Parent Email'] || record['parent_email'] || null,
+          class: classValue,
+          section: sectionValue,
+          academic_year: school.academic_year || null
+        };
+      })
+      .filter(student => {
+        const valid = student.first_name && student.last_name;
+        if (!valid) console.warn('⚠️ Skipping invalid student:', student);
+        return valid;
+      });
 
-    if (schoolDataError) {
-      console.warn('Could not get academic year:', schoolDataError);
-    }
-
-    const academicYear = schoolData?.academic_year || null;
-
-    // Prepare students data for insertion
-    const studentsData = records.map(record => ({
-      school_id,
-      student_id: record['Student ID'] || record['student_id'] || null,
-      first_name: record['First Name'] || record['first_name'] || '',
-      last_name: record['Last Name'] || record['last_name'] || '',
-      date_of_birth: record['Date of Birth'] || record['date_of_birth'] || null,
-      gender: record['Gender'] || record['gender'] || null,
-      parent_name: record['Parent Name'] || record['parent_name'] || null,
-      parent_phone: record['Parent Phone'] || record['parent_phone'] || null,
-      parent_email: record['Parent Email'] || record['parent_email'] || null,
-      class: classValue,
-      section: sectionValue,
-      academic_year: academicYear
-    })).filter(student => student.first_name && student.last_name);
-
+    console.log('✅ Valid students:', studentsData.length);
     if (studentsData.length === 0) {
-      return res.status(400).json({ error: 'No valid student records found in file' });
+      console.error('❌ No valid students after filtering');
+      return res.status(400).json({ error: 'No valid student records found' });
     }
 
-    // Insert students
-    const { data, error } = await supabase
+    // INSERT INTO DATABASE
+    console.log('💾 Attempting to insert', studentsData.length, 'students...');
+    console.log('📋 First student:', studentsData[0]);
+
+    const { data: inserted, error: dbError } = await supabase
       .from('students')
       .insert(studentsData)
       .select();
 
-    if (error) {
-      throw error;
+    if (dbError) {
+      console.error('🔥 DATABASE INSERT ERROR:', dbError);
+      console.error('📋 Sample payload that failed:', studentsData[0]);
+      return res.status(500).json({ 
+        error: 'Database insert failed: ' + (dbError.message || 'Unknown error'),
+        details: dbError
+      });
     }
 
+    console.log('✅ SUCCESS: Inserted', inserted.length, 'students');
     return res.status(201).json({
-      message: `${studentsData.length} students uploaded successfully`,
-      count: studentsData.length,
-      data
+      message: `${inserted.length} students uploaded successfully`,
+      count: inserted.length,
+      data: inserted
     });
+
   } catch (err) {
-    console.error('Upload students error:', err);
-    return res.status(500).json({ error: 'Internal server error' });
+    console.error('💥 UNCAUGHT ERROR in uploadStudents:', err);
+    console.error('💥 Stack trace:', err.stack);
+    return res.status(500).json({ 
+      error: 'Internal server error',
+      details: err.message
+    });
   }
 };
-
 // ✅ POST /api/exams - Create exam
 export const createExam = async (req, res) => {
   const {
