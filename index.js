@@ -1,3 +1,4 @@
+// index.js
 import express from 'express';
 import cors from 'cors';
 import 'dotenv/config';
@@ -55,10 +56,10 @@ app.get('/health', (req, res) => res.status(200).send('ok'));
 // Authentication routes
 app.use('/api/login', authRoutes);
 
-// School routes
+// School routes (list, create, delete)
 app.use('/api/schools', schoolRoutes);
 
-// Upload routes
+// Upload routes (bulk school upload)
 app.use('/api/upload-schools', uploadRoutes);
 
 // =========================
@@ -80,14 +81,21 @@ app.post('/api/schools/:school_id/students/upload',
   schoolController.uploadStudents
 );
 
-// Exams routes
+// 👇👇👇 ADD THESE TWO MISSING ROUTES 👇👇👇
+
+// Get single school by ID (used in ExamsRegistration.jsx for class dropdown)
+app.get('/api/schools/:school_id', schoolController.getSchoolById);
+
+// Get all exams (used to populate exams table in ExamsRegistration.jsx)
+app.get('/api/exams', schoolController.getExams);
+// Exams creation
 app.post('/api/exams', schoolController.createExam);
+app.post('/api/exams/:exam_id/results/upload', upload.single('file'), schoolController.uploadExamResults);
 
 // Reference data routes
 app.get('/api/foundations', schoolController.getFoundations);
 app.get('/api/programs', schoolController.getPrograms);
 app.get('/api/academic-years', schoolController.getAcademicYears);
-
 // =========================
 // 🚨 Error Handling
 // =========================
@@ -113,7 +121,9 @@ app.listen(PORT, () => {
   console.log(`   POST   /api/teachers`);
   console.log(`   POST   /api/teacher-assignments`);
   console.log(`   POST   /api/schools/:school_id/students/upload`);
+  console.log(`   GET    /api/schools/:school_id`); // 👈 Added
   console.log(`   POST   /api/exams`);
+  console.log(`   GET    /api/exams`); // 👈 Added
   console.log(`   GET    /api/foundations`);
   console.log(`   GET    /api/programs`);
   console.log(`   GET    /api/academic-years`);

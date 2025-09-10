@@ -1,3 +1,4 @@
+// schoolController.js
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
@@ -93,7 +94,6 @@ export const createSchool = async (req, res) => {
       return res.status(500).json({ error: rpcError.message });
     }
 
-    // ✅ Query from `schools` table, not `school_list` view
     const { data, error } = await supabase
       .from('schools')
       .select('*')
@@ -126,7 +126,7 @@ export const getSchoolById = async (req, res) => {
 
     const { data: classes, error: classesError } = await supabase
       .from('classes')
-      .select('school_id, class, foundation, program, "group", section, num_students') // ✅ FIXED
+      .select('school_id, class, foundation, program, "group", section, num_students')
       .eq('school_id', school_id)
       .order('class', { ascending: true })
       .order('section', { ascending: true });
@@ -134,11 +134,10 @@ export const getSchoolById = async (req, res) => {
     if (classesError) {
       console.warn('Classes load error:', classesError);
     }
-    console.log('📚 CLASSES RETURNED:', classes); // 👈 DEBUG
 
     const { data: rawTeachers, error: teachersError } = await supabase
       .from('teachers')
-      .select('id, teacherId:teacher_id, name, contact, email') 
+      .select('id, teacher_id, name, contact, email') // 👈 Removed alias to match frontend
       .eq('school_id', school_id);
 
     if (teachersError) {
@@ -147,7 +146,7 @@ export const getSchoolById = async (req, res) => {
 
     let assignmentsMap = {};
     if (rawTeachers?.length) {
-      const teacherRowIds = rawTeachers.map(t => t.id); // UUIDs
+      const teacherRowIds = rawTeachers.map(t => t.id);
       const { data: assignments, error: assignmentsError } = await supabase
         .from('teacher_assignments')
         .select('teacher_id, class, section, subject')
@@ -191,7 +190,6 @@ export const deleteSchool = async (req, res) => {
   }
 
   try {
-    // 1. Delete all teachers for this school
     const { error: teachersDeleteError } = await supabase
       .from('teachers')
       .delete()
@@ -202,7 +200,6 @@ export const deleteSchool = async (req, res) => {
       return res.status(500).json({ error: 'Failed to delete teachers' });
     }
 
-    // 2. Delete all classes for this school
     const { error: classesDeleteError } = await supabase
       .from('classes')
       .delete()
@@ -213,7 +210,6 @@ export const deleteSchool = async (req, res) => {
       return res.status(500).json({ error: 'Failed to delete classes' });
     }
 
-    // 3. Delete the school
     const { error: schoolDeleteError } = await supabase
       .from('schools')
       .delete()
@@ -224,7 +220,6 @@ export const deleteSchool = async (req, res) => {
       return res.status(500).json({ error: 'Failed to delete school' });
     }
 
-    // ✅ Success
     return res.status(200).json({
       message: `School ${school_id} and all associated data deleted successfully.`,
       school_id
@@ -256,7 +251,6 @@ export const createClass = async (req, res) => {
   }
 
   try {
-    // Call the create_class function
     const { data, error } = await supabase.rpc('create_class', {
       p_school_id: school_id,
       p_class: className,
@@ -300,7 +294,6 @@ export const createTeacher = async (req, res) => {
   }
 
   try {
-    // Call the create_teacher function
     const { data, error } = await supabase.rpc('create_teacher', {
       p_school_id: school_id,
       p_teacher_id: teacher_id,
@@ -341,7 +334,6 @@ export const assignTeacherToClass = async (req, res) => {
   }
 
   try {
-    // Call the assign_teacher_to_class function
     const { data, error } = await supabase.rpc('assign_teacher_to_class', {
       p_school_id: school_id,
       p_teacher_id: teacher_id,
@@ -375,7 +367,6 @@ export const uploadStudents = async (req, res) => {
     const { school_id } = req.params;
     const { class_section } = req.body;
 
-    // VALIDATE INPUTS
     if (!school_id) {
       console.error('❌ Validation failed: school_id is required');
       return res.status(400).json({ error: 'school_id is required' });
@@ -389,7 +380,6 @@ export const uploadStudents = async (req, res) => {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    // VERIFY SCHOOL EXISTS
     console.log('🔍 Fetching school record...');
     const { data: school, error: schoolError } = await supabase
       .from('schools')
@@ -403,7 +393,6 @@ export const uploadStudents = async (req, res) => {
     }
     console.log('✅ School record:', school);
 
-    // PARSE FILE
     console.log('📊 Parsing file:', req.file.originalname);
     let records = [];
     const buffer = req.file.buffer;
@@ -439,7 +428,6 @@ export const uploadStudents = async (req, res) => {
       return res.status(400).json({ error: 'No data found in file' });
     }
 
-    // EXTRACT CLASS & SECTION
     let classValue = '';
     let sectionValue = '';
     if (class_section) {
@@ -451,8 +439,6 @@ export const uploadStudents = async (req, res) => {
     }
     console.log('🏷️ Class/Section:', { classValue, sectionValue });
 
-    // MAP RECORDS TO STUDENTS
-    console.log('🧑‍🎓 Mapping student records...');
     const studentsData = records
       .map((record, index) => {
         console.log(`📄 Record ${index + 1}:`, record);
@@ -483,7 +469,6 @@ export const uploadStudents = async (req, res) => {
       return res.status(400).json({ error: 'No valid student records found' });
     }
 
-    // INSERT INTO DATABASE
     console.log('💾 Attempting to insert', studentsData.length, 'students...');
     console.log('📋 First student:', studentsData[0]);
 
@@ -517,83 +502,89 @@ export const uploadStudents = async (req, res) => {
     });
   }
 };
-// ✅ POST /api/exams - Create exam
+
+// ✅ POST /api/exams - Create exam — MATCHES FRONTEND
 export const createExam = async (req, res) => {
-  const {
-    school_id,
-    foundation,
-    program,
-    exam_name,
-    exam_template,
-    exam_pattern,
-    class: className
-  } = req.body;
-
-  if (!school_id || !foundation || !program || !exam_name || !exam_template || !className) {
-    return res.status(400).json({
-      error: 'Missing required fields: school_id, foundation, program, exam_name, exam_template, class'
-    });
-  }
-
   try {
-    // Call the create_exam function
-    const { data, error } = await supabase.rpc('create_exam', {
-      p_school_id: school_id,
-      p_foundation: foundation,
-      p_program: program,
-      p_exam_name: exam_name,
-      p_exam_template: exam_template,
-      p_exam_pattern: exam_pattern,
-      p_class: className
-    });
+    const {
+      school_id,
+      foundation,
+      program,
+      exam_template,
+      exam_pattern,
+      class: examClass,
+      // ❌ REMOVED: exam_name — frontend doesn't send it
+      // ❌ REMOVED: created_at — let DB handle it
+    } = req.body;
 
-    if (error) {
-      return res.status(400).json({ error: error.message || 'Failed to create exam' });
-    }
+    if (!school_id) return res.status(400).json({ error: "Missing required field: school_id" });
+    if (!foundation) return res.status(400).json({ error: "Missing required field: foundation" });
+    if (!program) return res.status(400).json({ error: "Missing required field: program" });
+    if (!exam_template) return res.status(400).json({ error: "Missing required field: exam_template" });
+    if (!exam_pattern) return res.status(400).json({ error: "Missing required field: exam_pattern" });
+    if (!examClass) return res.status(400).json({ error: "Missing required field: class" });
 
-    if (!data.success) {
-      return res.status(400).json({ error: data.error || 'Failed to create exam' });
-    }
+    const { data, error } = await supabase
+      .from('exams')
+      .insert([
+        {
+          school_id,
+          foundation,
+          program,
+          exam_template,
+          exam_pattern,
+          class: examClass,
+          // ✅ created_at uses DEFAULT NOW() from table
+        }
+      ])
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: 'Database insert failed: ' + error.message });
 
     return res.status(201).json(data);
-  } catch (err) {
-    console.error('Create exam error:', err);
+  } catch (error) {
+    console.error('Error creating exam:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
 
-// ✅ GET /api/foundations - Get foundations
-export const getFoundations = async (req, res) => {
+// ✅ GET /api/exams - Get all exams — REQUIRED BY FRONTEND
+export const getExams = async (req, res) => {
   try {
-    const foundations = [
-      { id: 'cbse', name: 'CBSE' },
-      { id: 'icse', name: 'ICSE' },
-      { id: 'state-board', name: 'State Board' },
-      { id: 'ib', name: 'International Baccalaureate' }
-    ];
-    
-    return res.json(foundations);
-  } catch (err) {
-    console.error('Get foundations error:', err);
+    const { data, error } = await supabase
+      .from('exams')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) return res.status(500).json({ error: 'Database query failed: ' + error.message });
+
+    return res.status(200).json(data);
+  } catch (error) {
+    console.error('Error fetching exams:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
 
-// ✅ GET /api/programs - Get programs
-export const getPrograms = async (req, res) => {
-  try {
-    const programs = [
-      { id: 'regular', name: 'Regular Program' },
-      { id: 'advanced', name: 'Advanced Program' },
-      { id: 'foundation', name: 'Foundation Program' },
-      { id: 'olympiad', name: 'Olympiad Program' }
-    ];
-    
-    return res.json(programs);
-  } catch (err) {
-    console.error('Get programs error:', err);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
+// ✅ GET /api/foundations - MUST MATCH FRONTEND
+export const getFoundations = (req, res) => {
+  const FOUNDATIONS = [
+    { id: 'IIT-MED', name: 'IIT-MED' },
+    { id: 'IIT', name: 'IIT' },
+    { id: 'MED', name: 'MED' },
+    { id: 'FF', name: 'FF' }
+  ];
+  res.json(FOUNDATIONS);
+};
+
+// ✅ GET /api/programs - MUST MATCH FRONTEND
+export const getPrograms = (req, res) => {
+  const PROGRAMS = [
+    { id: 'CAT', name: 'CAT' },
+    { id: 'MAE', name: 'MAE' },
+    { id: 'PIO', name: 'PIO' }
+  ];
+  res.json(PROGRAMS);
 };
 
 // ✅ GET /api/academic-years - Get academic years
@@ -615,5 +606,191 @@ export const getAcademicYears = async (req, res) => {
   } catch (err) {
     console.error('Get academic years error:', err);
     return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+// ✅ POST /api/exams/:exam_id/results/upload - Upload and process exam results
+export const uploadExamResults = async (req, res) => {
+  const { exam_id } = req.params;
+  
+  if (!exam_id) {
+    return res.status(400).json({ error: 'Exam ID is required' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  try {
+    let records = [];
+    const buffer = req.file.buffer;
+    const filename = req.file.originalname.toLowerCase();
+
+    // Parse file
+    if (filename.endsWith('.csv')) {
+      const { parse } = await import('csv-parse/sync');
+      records = parse(buffer.toString('utf-8'), {
+        columns: true,
+        skip_empty_lines: true,
+        relax_column_count: true
+      });
+    } else if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
+      const XLSX = await import('xlsx');
+      const workbook = XLSX.read(buffer, { type: 'buffer' });
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      records = XLSX.utils.sheet_to_json(worksheet, { defval: null });
+    } else {
+      return res.status(400).json({ error: 'Unsupported file format. Use CSV, XLSX, or XLS.' });
+    }
+
+    if (!records.length) {
+      return res.status(400).json({ error: 'No data found in file' });
+    }
+
+    // 🔍 DEBUG: Log first 3 rows to verify column mapping
+    console.log('📄 First 3 rows from Excel:', records.slice(0, 3));
+
+    // Fetch exam details to validate and enrich data
+    const { data: exam, error: examError } = await supabase
+      .from('exams')
+      .select('school_id, class, foundation, program, exam_template, exam_pattern')
+      .eq('id', exam_id)
+      .single();
+
+    if (examError || !exam) {
+      return res.status(404).json({ error: 'Exam not found' });
+    }
+
+    // 🧮 Helper to safely extract number from any of given keys
+    const getNumber = (row, ...keys) => {
+      for (let key of keys) {
+        if (key in row && row[key] != null && row[key] !== '') {
+          const num = parseFloat(row[key]);
+          if (!isNaN(num)) return num;
+        }
+      }
+      return 0;
+    };
+
+    // 🧍 Helper to get string (trim, fallback to empty)
+    const getString = (row, ...keys) => {
+      for (let key of keys) {
+        if (key in row && row[key] != null) {
+          return String(row[key]).trim();
+        }
+      }
+      return '';
+    };
+
+    // 💡 Determine total questions based on foundation/program (optional)
+    // You mentioned: IIT-MED=60, IIT=45, etc. — adjust as needed
+    const getDefaultTotalQuestions = () => {
+      if (exam.foundation === 'IIT-MED') return 60;
+      if (exam.foundation === 'IIT') return 45;
+      if (exam.program === 'PIO' || exam.program === 'MAE') return 60; // Pioneer/Maestro
+      return 60; // default fallback
+    };
+
+    // Process records
+    const results = records.map(r => {
+      // Extract using ACTUAL Excel column names
+      const studentId = getString(r, 'Roll No', 'StudentID', 'student_id', 'RollNo');
+      const firstName = getString(r, 'Name', 'StudentName', 'first_name'); // You may split Name later
+      const lastName = ''; // Not provided — leave empty or split Name if needed
+
+      // Extract marks
+      const physics = getNumber(r, 'PHYSICS', 'Physics', 'physics');
+      const chemistry = getNumber(r, 'CHEMISTRY', 'Chemistry', 'chemistry');
+      const maths = getNumber(r, 'MATHS', 'Maths', 'maths');
+      const biology = getNumber(r, 'BIOLOGY', 'Biology', 'biology');
+
+      // Extract answer stats
+      const correct = getNumber(r, 'Correct Answers', 'Correct', 'correct');
+      const wrong = getNumber(r, 'Incorrect Answers', 'Wrong', 'wrong');
+      const unattempted = getNumber(r, 'Not attempted', 'Unattempted', 'unattempted');
+
+      // Calculate total marks
+      const totalMarks = physics + chemistry + maths + biology;
+
+      // Use provided "Total Marks" if available, else calculate
+      // const totalMarksOverride = getNumber(r, 'Total Marks', 'TotalMarks');
+      // const finalTotalMarks = totalMarksOverride > 0 ? totalMarksOverride : totalMarks;
+
+      // Determine total questions (prefer Excel, fallback to default)
+      const totalQuestionsFromExcel = getNumber(r, 'Total Questions', 'TotalQ', 'total_questions');
+      const totalQuestions = totalQuestionsFromExcel > 0 ? totalQuestionsFromExcel : getDefaultTotalQuestions();
+
+      // Calculate percentage
+      const percentage = totalQuestions > 0 ? ((correct / totalQuestions) * 100).toFixed(2) : 0;
+
+      return {
+        student_id: studentId,
+        first_name: firstName,
+        last_name: lastName,
+        total_questions: totalQuestions,
+        correct: correct,
+        wrong: wrong,
+        unattempted: unattempted,
+        physics_marks: physics,
+        chemistry_marks: chemistry,
+        maths_marks: maths,
+        biology_marks: biology,
+        total_marks: totalMarks, // or finalTotalMarks if you use override
+        percentage: percentage,
+        class_rank: '-', // Placeholder - compute in future
+        school_rank: '-', // Placeholder
+        all_schools_rank: '-' // Placeholder
+      };
+    });
+
+    // ✅ STORE IN DATABASE (UNCOMMENTED)
+    const examResultsData = results.map(r => ({
+      exam_id: parseInt(exam_id),
+      student_id: r.student_id,
+      first_name: r.first_name,
+      last_name: r.last_name,
+      physics_marks: r.physics_marks,
+      chemistry_marks: r.chemistry_marks,
+      maths_marks: r.maths_marks,
+      biology_marks: r.biology_marks,
+      total_questions: r.total_questions,
+      correct_answers: r.correct,
+      wrong_answers: r.wrong,
+      unattempted: r.unattempted,
+      total_marks: r.total_marks,
+      percentage: parseFloat(r.percentage),
+      created_at: new Date().toISOString()
+    }));
+
+    const { error: insertError } = await supabase
+      .from('exam_results')
+      .insert(examResultsData);
+
+    if (insertError) {
+      console.error('❌ Error inserting exam results:', insertError);
+      // Don't fail the request - still return processed data
+    }
+
+    // ✅ SUCCESS RESPONSE
+    return res.status(200).json({
+      success: true,
+      exam: {
+        id: exam_id,
+        school_id: exam.school_id,
+        class: exam.class,
+        foundation: exam.foundation,
+        program: exam.program,
+        exam_template: exam.exam_template,
+        exam_pattern: exam.exam_pattern
+      },
+      results: results,
+      count: results.length
+    });
+
+  } catch (err) {
+    console.error('💥 Error processing exam results:', err);
+    return res.status(500).json({ 
+      error: 'Failed to process file',
+      details: err.message
+    });
   }
 };
