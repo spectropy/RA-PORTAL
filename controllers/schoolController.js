@@ -441,29 +441,44 @@ export const uploadStudents = async (req, res) => {
     console.log('🏷️ Class/Section:', { classValue, sectionValue });
  
     const studentsData = records
-      .map((record, index) => {
-        console.log(`📄 Record ${index + 1}:`, record);
-        return {
-          school_id: school_id,
-          student_id: record['Student ID'] || record['student_id'] || null,
-          first_name: (record['First Name'] || record['first_name'] || '').trim(),
-          last_name: (record['Last Name'] || record['last_name'] || '').trim(),
-          date_of_birth: record['Date of Birth'] || record['date_of_birth'] || null,
-          gender: record['Gender'] || record['gender'] || null,
-          parent_name: record['Parent Name'] || record['parent_name'] || null,
-          parent_phone: record['Parent Phone'] || record['parent_phone'] || null,
-          parent_email: record['Parent Email'] || record['parent_email'] || null,
-          class: classValue,
-          section: sectionValue,
-          academic_year: school.academic_year || null
-        };
-      })
-      .filter(student => {
-        const valid = student.first_name && student.last_name;
-        if (!valid) console.warn('⚠️ Skipping invalid student:', student);
-        return valid;
-      });
- 
+  .map((record, index) => {
+    console.log(`📄 Record ${index + 1}:`, record);
+
+    // 🆕 Get NAME → store as `name`
+    const studentName = (record['NAME'] || record['name'] || record['First Name'] || '').trim();
+    
+    // 🆕 Get ROLLNO → convert to INTEGER for `roll_no`
+    const rollNoRaw = record['ROLLNO'] || record['Roll No'] || record['Student ID'] || record['student_id'];
+    const rollNo = parseInt(rollNoRaw, 10);
+    
+    // ❗ If roll_no is not a valid number, skip this record
+    if (isNaN(rollNo) || rollNo <= 0) {
+      console.warn(`⚠️ Skipping record ${index + 1}: Invalid roll_no (${rollNoRaw})`);
+      return null; // Will be filtered out
+    }
+
+    // 🆕 Get phone/email with fallbacks
+    const parentPhone = record['PHONENO'] || record['Phone'] || record['Parent Phone'] || record['parent_phone'] || null;
+    const parentEmail = record['EMAILID'] || record['Email'] || record['Parent Email'] || record['parent_email'] || null;
+
+    return {
+      school_id: school_id,
+      student_id: String(rollNo), // 👈 Use roll_no as student_id if needed, or generate one
+      roll_no: rollNo,            // 👈 INTEGER, required
+      name: studentName,          // 👈 Single "name" field, required
+      class: classValue,
+      section: sectionValue,
+      gender: record['Gender'] || record['gender'] || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+  })
+  .filter(Boolean) // Remove nulls from invalid roll_no
+  .filter(student => {
+    const valid = student.name && student.roll_no > 0;
+    if (!valid) console.warn('⚠️ Skipping invalid student:', student);
+    return valid;
+  });
     console.log('✅ Valid students:', studentsData.length);
     if (studentsData.length === 0) {
       console.error('❌ No valid students after filtering');
