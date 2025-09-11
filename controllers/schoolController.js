@@ -406,7 +406,7 @@ export const uploadStudents = async (req, res) => {
           columns: true,
           skip_empty_lines: true,
           relax_column_count: true,
-          bom: true,
+          bom: true
         });
       } else if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
         console.log('📄 Parsing Excel...');
