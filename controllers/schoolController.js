@@ -432,12 +432,13 @@ export const uploadStudents = async (req, res) => {
     let classValue = '';
     let sectionValue = '';
     if (class_section) {
-      const parts = class_section.split('-');
-      if (parts.length >= 2) {
-        classValue = parts[0];
-        sectionValue = parts[1];
-      }
-    }
+  // Split by last occurrence of '-' to handle cases like "Grade - 6-A"
+  const lastDashIndex = class_section.lastIndexOf('-');
+  if (lastDashIndex > 0 && lastDashIndex < class_section.length - 1) {
+    classValue = class_section.substring(0, lastDashIndex).trim();
+    sectionValue = class_section.substring(lastDashIndex + 1).trim();
+  }
+}
     console.log('🏷️ Class/Section:', { classValue, sectionValue });
  
     const studentsData = records
@@ -899,3 +900,32 @@ if (fetchError) {
   }
 };
  
+// ✅ GET /api/schools/:school_id/students?class=...&section=...
+export const getStudentsByClassSection = async (req, res) => {
+  const { school_id } = req.params;
+  const { class: classValue, section: sectionValue } = req.query;
+
+  if (!school_id || !classValue || !sectionValue) {
+    return res.status(400).json({ error: 'Missing required parameters: school_id, class, section' });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('students')
+      .select('*')
+      .eq('school_id', school_id)
+      .eq('class', classValue)
+      .eq('section', sectionValue)
+      .order('roll_no', { ascending: true });
+
+    if (error) {
+      console.error('Supabase query error:', error);
+      return res.status(500).json({ error: 'Database query failed' });
+    }
+
+    return res.status(200).json(data);
+  } catch (err) {
+    console.error('Error in getStudentsByClassSection:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};

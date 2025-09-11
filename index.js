@@ -80,7 +80,7 @@ app.post('/api/schools/:school_id/students/upload',
   upload.single('file'), 
   schoolController.uploadStudents
 );
-
+app.get('/api/schools/:school_id/students', schoolController.getStudentsByClassSection);
 // 👇👇👇 ADD THESE TWO MISSING ROUTES 👇👇👇
 
 // Get single school by ID (used in ExamsRegistration.jsx for class dropdown)
