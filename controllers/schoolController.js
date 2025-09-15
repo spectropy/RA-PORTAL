@@ -525,32 +525,32 @@ export const createExam = async (req, res) => {
   try {
     const {
       school_id,
-      foundation,
       program,
       exam_template,
       exam_pattern,
       class: examClass,
+      section: examSection,
       // ❌ REMOVED: exam_name — frontend doesn't send it
       // ❌ REMOVED: created_at — let DB handle it
     } = req.body;
  
     if (!school_id) return res.status(400).json({ error: "Missing required field: school_id" });
-    if (!foundation) return res.status(400).json({ error: "Missing required field: foundation" });
     if (!program) return res.status(400).json({ error: "Missing required field: program" });
     if (!exam_template) return res.status(400).json({ error: "Missing required field: exam_template" });
     if (!exam_pattern) return res.status(400).json({ error: "Missing required field: exam_pattern" });
     if (!examClass) return res.status(400).json({ error: "Missing required field: class" });
- 
+    if (!examSection) return res.status(400).json({ error: "Missing required field: section" });
+
     const { data, error } = await supabase
       .from('exams')
       .insert([
         {
           school_id,
-          foundation,
           program,
           exam_template,
           exam_pattern,
           class: examClass,
+          section: examSection, 
           // ✅ created_at uses DEFAULT NOW() from table
         }
       ])
@@ -626,22 +626,23 @@ export const getAcademicYears = async (req, res) => {
   }
 };
 // ✅ POST /api/exams/:exam_id/results/upload - Upload and process exam results
+// ✅ POST /api/exams/:exam_id/results/upload - Upload and process exam results
 export const uploadExamResults = async (req, res) => {
   const { exam_id } = req.params;
- 
+
   if (!exam_id) {
     return res.status(400).json({ error: 'Exam ID is required' });
   }
- 
+
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
- 
+
   try {
     let records = [];
     const buffer = req.file.buffer;
     const filename = req.file.originalname.toLowerCase();
- 
+
     // Parse file
     if (filename.endsWith('.csv')) {
       const { parse } = await import('csv-parse/sync');
@@ -659,39 +660,40 @@ export const uploadExamResults = async (req, res) => {
     } else {
       return res.status(400).json({ error: 'Unsupported file format. Use CSV, XLSX, or XLS.' });
     }
- 
+
     if (!records.length) {
       return res.status(400).json({ error: 'No data found in file' });
     }
- 
-    // Skip first row if it looks like a header (e.g., contains "Roll No", "Name", or many "0"s)
-    // Skip first row if it looks like a header (e.g., contains "Roll No", "Name", or many "0"s)
-if (
-  records.length > 0 &&
-  (
-    (records[0]['2'] && String(records[0]['2']).toLowerCase().includes('roll')) ||
-    (records[0]['3'] && String(records[0]['3']).toLowerCase().includes('name')) ||
-    (records[0]['10'] === '0' && records[0]['11'] === '0' && records[0]['12'] === '0') // e.g., marks are 0
-  )
-) {
-  console.log('🗑️ Skipping header row:', records[0]);
-  records = records.slice(1); // Remove first row
-}
-// 🔍 DEBUG: Log first 3 rows to verify column mapping
+
+    // Skip first row if it looks like a header
+    if (
+      records.length > 0 &&
+      (
+        (records[0]['2'] && String(records[0]['2']).toLowerCase().includes('roll')) ||
+        (records[0]['3'] && String(records[0]['3']).toLowerCase().includes('name')) ||
+        (records[0]['10'] === '0' && records[0]['11'] === '0' && records[0]['12'] === '0')
+      )
+    ) {
+      console.log('🗑️ Skipping header row:', records[0]);
+      records = records.slice(1);
+    }
+
+    // 🔍 DEBUG: Log first 3 rows
     console.log('📄 First 3 rows from Excel:', records.slice(0, 3));
- 
-    // Fetch exam details to validate and enrich data
+    console.log('Exam ID:', exam_id);
+
+    // Fetch exam details
     const { data: exam, error: examError } = await supabase
       .from('exams')
-      .select('school_id, class, foundation, program, exam_template, exam_pattern')
+      .select('school_id, class, program, exam_template, exam_pattern')
       .eq('id', exam_id)
       .single();
- 
+
     if (examError || !exam) {
       return res.status(404).json({ error: 'Exam not found' });
     }
- 
-    // 🧮 Helper to safely extract number from any of given keys
+
+    // 🧮 Helper to safely extract number
     const getNumber = (row, ...keys) => {
       for (let key of keys) {
         if (key in row && row[key] != null && row[key] !== '') {
@@ -701,8 +703,8 @@ if (
       }
       return 0;
     };
- 
-    // 🧍 Helper to get string (trim, fallback to empty)
+
+    // 🧍 Helper to get string
     const getString = (row, ...keys) => {
       for (let key of keys) {
         if (key in row && row[key] != null) {
@@ -711,67 +713,70 @@ if (
       }
       return '';
     };
- 
-    // 💡 Determine total questions based on foundation/program (optional)
-    // You mentioned: IIT-MED=60, IIT=45, etc. — adjust as needed
-    const getDefaultTotalQuestions = () => {
-      if (exam.foundation === 'IIT-MED') return 60;
-      if (exam.foundation === 'IIT') return 45;
-      if (exam.program === 'PIO' || exam.program === 'MAE') return 60; // Pioneer/Maestro
-      return 60; // default fallback
-    };
- 
-    // Process records
-   const results = records.map(r => {
-  // Map indexed columns to named fields
- 
-    // ✅ DEFINE COLUMN_MAP — Maps Excel column index to field name
+
+    // ✅ FIXED COLUMN_MAP — Based on your spec:
+    // C=2, D=3, H=7, I=8, J=9, K=10, S=18, AA=26, AI=34
     const COLUMN_MAP = {
-      2: 'student_id',       // Roll No / Student ID
-      3: 'student_name',     // Student Name
-      7: 'total_questions',  // Total Q
-      8: 'correct',          // Correct
-      9: 'wrong',            // Wrong
-      10: 'physics',         // Physics Marks
-      11: 'chemistry',       // Chemistry Marks
-      12: 'maths',           // Maths Marks
-      13: 'biology',         // Biology Marks
+      2: 'student_id',       // C → Roll No
+      3: 'student_name',     // D → Name
+      7: 'correct',          // H → Correct
+      8: 'wrong',            // I → Wrong
+      9: 'unattempted',      // J → Unattempted
+      10: 'physics',         // K → Physics
+      18: 'chemistry',       // S → Chemistry
+      26: 'maths',           // AA → Maths
+      34: 'biology',         // AI → Biology
     };
- 
-    const results = records.map(r => {
-      // Map indexed columns to named fields
+
+    // ✅ Process records — SINGLE map, no nesting
+    const results = records.map((r, idx) => {
+      // Safety check
+      if (!r) {
+        console.warn(`⚠️ Skipping null/undefined row at index ${idx}`);
+        return null;
+      }
+
+      // Map columns
       const mappedRow = {};
       for (const [index, key] of Object.entries(COLUMN_MAP)) {
-        mappedRow[key] = r[index];
+        if (index in r) {
+          mappedRow[key] = r[index];
+        } else {
+          console.warn(`⚠️ Column index ${index} not found in row ${idx + 1} for key "${key}"`);
+          mappedRow[key] = null;
+        }
       }
- 
-      // Now extract from mappedRow
+
+      // Extract values
       const studentId = getString(mappedRow, 'student_id');
       const studentName = getString(mappedRow, 'student_name');
       const physics = getNumber(mappedRow, 'physics');
       const chemistry = getNumber(mappedRow, 'chemistry');
       const maths = getNumber(mappedRow, 'maths');
       const biology = getNumber(mappedRow, 'biology');
-      const totalQuestions = getNumber(mappedRow, 'total_questions');
       const correct = getNumber(mappedRow, 'correct');
       const wrong = getNumber(mappedRow, 'wrong');
-      const unattempted = totalQuestions - correct - wrong; // Calculate if not provided
- 
-      // Split name if needed
+      const unattempted = getNumber(mappedRow, 'unattempted');
+
+      // ✅ HARD CODED: Total Questions = 60 for IIT
+      const totalQuestions = 60;
+
+      // Split name
       const nameParts = studentName.split(' ');
       const firstName = nameParts[0] || '';
       const lastName = nameParts.slice(1).join(' ') || '';
- 
+
+      // Calculate total marks
       const totalMarks = physics + chemistry + maths + biology;
       const percentage = totalQuestions > 0 ? ((correct / totalQuestions) * 100).toFixed(2) : 0;
- 
+
       return {
         student_id: studentId,
         first_name: firstName,
         last_name: lastName,
         total_questions: totalQuestions,
-        correct: correct,
-        wrong: wrong,
+        correct_answers: correct,
+        wrong_answers: wrong,
         unattempted: unattempted,
         physics_marks: physics,
         chemistry_marks: chemistry,
@@ -783,54 +788,13 @@ if (
         school_rank: '-',
         all_schools_rank: '-'
       };
-    });
- 
-  const mappedRow = {};
-  for (const [index, key] of Object.entries(COLUMN_MAP)) {
-    mappedRow[key] = r[index];
-  }
- 
-  // Now extract from mappedRow
-  const studentId = getString(mappedRow, 'student_id');
-  const studentName = getString(mappedRow, 'student_name');
-  const physics = getNumber(mappedRow, 'physics');
-  const chemistry = getNumber(mappedRow, 'chemistry');
-  const maths = getNumber(mappedRow, 'maths');
-  const biology = getNumber(mappedRow, 'biology');
-  const totalQuestions = getNumber(mappedRow, 'total_questions');
-  const correct = getNumber(mappedRow, 'correct');
-  const wrong = getNumber(mappedRow, 'wrong');
-  const unattempted = totalQuestions - correct - wrong; // Calculate if not provided
- 
-  // Split name if needed
-  const nameParts = studentName.split(' ');
-  const firstName = nameParts[0] || '';
-  const lastName = nameParts.slice(1).join(' ') || '';
- 
-  const totalMarks = physics + chemistry + maths + biology;
-  const percentage = totalQuestions > 0 ? ((correct / totalQuestions) * 100).toFixed(2) : 0;
- 
-  return {
-    student_id: studentId,
-    first_name: firstName,
-    last_name: lastName,
-    total_questions: totalQuestions,
-    correct: correct,
-    wrong: wrong,
-    unattempted: unattempted,
-    physics_marks: physics,
-    chemistry_marks: chemistry,
-    maths_marks: maths,
-    biology_marks: biology,
-    total_marks: totalMarks,
-    percentage: percentage,
-    class_rank: '-',
-    school_rank: '-',
-    all_schools_rank: '-'
-  };
-});
- 
-    // ✅ STORE IN DATABASE (UNCOMMENTED)
+    }).filter(Boolean); // Remove any nulls
+
+    if (results.length === 0) {
+      return res.status(400).json({ error: 'No valid records processed' });
+    }
+
+    // ✅ STORE IN DATABASE
     const examResultsData = results.map(r => ({
       exam_id: parseInt(exam_id),
       student_id: r.student_id,
@@ -841,40 +805,42 @@ if (
       maths_marks: r.maths_marks,
       biology_marks: r.biology_marks,
       total_questions: r.total_questions,
-      correct_answers: r.correct,
-      wrong_answers: r.wrong,
+      correct_answers: r.correct_answers,    // ← Maps to Supabase column
+      wrong_answers: r.wrong_answers,        // ← Maps to Supabase column
       unattempted: r.unattempted,
       total_marks: r.total_marks,
       percentage: parseFloat(r.percentage),
       created_at: new Date().toISOString()
     }));
- 
+
+    // Insert into Supabase
     const { error: insertError } = await supabase
-  .from('exam_results')
-  .insert(examResultsData);
+      .from('exam_results')
+      .insert(examResultsData);
 
-if (insertError) {
-  console.error('❌ Error inserting exam results:', insertError);
-}
+    if (insertError) {
+      console.error('❌ Error inserting exam results:', insertError);
+      return res.status(500).json({
+        error: 'Database insert failed',
+        details: insertError.message
+      });
+    }
 
-// ✅ CALCULATE & UPDATE RANKS AFTER INSERT
-const { error: rankError } = await supabase.rpc('calculate_exam_ranks', {
-  p_exam_id: parseInt(exam_id)
-});
+    // ✅ CALCULATE RANKS
+    const { error: rankError } = await supabase.rpc('calculate_exam_ranks', {
+      p_exam_id: parseInt(exam_id)
+    });
 
-if (rankError) {
-  console.error('❌ Error calculating ranks:', rankError);
-}
+    if (rankError) {
+      console.error('❌ Error calculating ranks:', rankError);
+    }
 
-// ✅ FETCH UPDATED RESULTS WITH RANKS (OPTIONAL — for immediate response)
-const { data: finalResults, error: fetchError } = await supabase
-  .from('exam_results')
-  .select('*')
-  .eq('exam_id', exam_id);
-
-if (fetchError) {
-  console.warn('⚠️ Could not fetch ranked results:', fetchError);
-}
+    // ✅ FETCH FINAL RESULTS WITH RANKS
+    const { data: finalResults, error: fetchError } = await supabase
+      .from('exam_results')
+      .select('*')
+      .eq('exam_id', exam_id);
+   
     // ✅ SUCCESS RESPONSE
     return res.status(200).json({
       success: true,
@@ -882,15 +848,14 @@ if (fetchError) {
         id: exam_id,
         school_id: exam.school_id,
         class: exam.class,
-        foundation: exam.foundation,
         program: exam.program,
         exam_template: exam.exam_template,
         exam_pattern: exam.exam_pattern
       },
-     results: finalResults || results, // fallback if fetch fails
-     count: (finalResults || results).length
+      results: finalResults || results,
+      count: (finalResults || results).length
     });
- 
+
   } catch (err) {
     console.error('💥 Error processing exam results:', err);
     return res.status(500).json({
@@ -927,5 +892,136 @@ export const getStudentsByClassSection = async (req, res) => {
   } catch (err) {
     console.error('Error in getStudentsByClassSection:', err);
     return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+// ✅ POST /api/teachers/login - Direct teacher login by teacher_id
+export const loginTeacherByTeacherId = async (req, res) => {
+  const { teacher_id, password } = req.body;
+
+  if (!teacher_id || !password) {
+    return res.status(400).json({ error: "Teacher ID and password are required" });
+  }
+
+  // 🔐 For security: Password must match teacher_id (same logic as frontend)
+  if (teacher_id !== password) {
+    return res.status(401).json({ error: "Teacher ID and password must be identical" });
+  }
+
+  try {
+    // Fetch teacher record
+    const { data: teacher, error: teacherError } = await supabase
+      .from('teachers')
+      .select(`
+        id,
+        teacher_id,
+        name,
+        contact,
+        email,
+        school_id
+      `)
+      .eq('teacher_id', teacher_id.trim().toUpperCase())
+      .single();
+
+    if (teacherError || !teacher) {
+      return res.status(404).json({ error: "Invalid Teacher ID or password" });
+    }
+
+    // ✅ Also fetch assignments for this teacher
+    const { data: assignments, error: assignError } = await supabase
+      .from('teacher_assignments')
+      .select('class, section, subject')
+      .eq('teacher_id', teacher.id);
+
+    if (assignError) {
+      console.warn('Failed to load assignments:', assignError);
+    }
+
+    const teacherAssignments = Array.isArray(assignments) ? assignments : [];
+
+    // ✅ Also fetch school name for display
+    const { data: school, error: schoolError } = await supabase
+      .from('schools')
+      .select('school_name')
+      .eq('school_id', teacher.school_id)
+      .single();
+
+    if (schoolError) {
+      console.warn('Failed to load school name:', schoolError);
+    }
+
+    // 🚀 SUCCESS: Return full teacher + school data
+    return res.json({
+      success: true,
+      teacher: {
+        ...teacher,
+        teacher_assignments: teacherAssignments,
+        school_name: school?.school_name || "Unknown School"
+      }
+    });
+
+  } catch (err) {
+    console.error('Teacher login error:', err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+// ✅ POST /api/students/login - Direct student login by student_id
+export const loginStudentByStudentId = async (req, res) => {
+  const { student_id, password } = req.body;
+
+  if (!student_id || !password) {
+    return res.status(400).json({ error: "Student ID and password are required" });
+  }
+
+  // 🔐 For security: Password must match student_id (same logic as frontend)
+  if (student_id !== password) {
+    return res.status(401).json({ error: "Student ID and password must be identical" });
+  }
+
+  try {
+    // Fetch student record
+    const { data: student, error: studentError } = await supabase
+      .from('students')
+      .select(`
+        id,
+        student_id,
+        roll_no,
+        name,
+        class,
+        section,
+        gender,
+        parent_phone,
+        parent_email,
+        school_id
+      `)
+      .eq('student_id', student_id.trim())
+      .single();
+
+    if (studentError || !student) {
+      return res.status(404).json({ error: "Invalid Student ID or password" });
+    }
+
+    // ✅ Also fetch school name for display
+    const { data: school, error: schoolError } = await supabase
+      .from('schools')
+      .select('school_name')
+      .eq('school_id', student.school_id)
+      .single();
+
+    if (schoolError) {
+      console.warn('Failed to load school name:', schoolError);
+    }
+
+    // 🚀 SUCCESS: Return full student + school data
+    return res.json({
+      success: true,
+      student: {
+        ...student,
+        school_name: school?.school_name || "Unknown School"
+      }
+    });
+
+  } catch (err) {
+    console.error('Student login error:', err);
+    return res.status(500).json({ error: "Internal server error" });
   }
 };
