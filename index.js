@@ -92,7 +92,8 @@ app.get('/api/exams', schoolController.getExams);
 // Exams creation
 app.post('/api/exams', schoolController.createExam);
 app.post('/api/exams/:exam_id/results/upload', upload.single('file'), schoolController.uploadExamResults);
-
+// 👇 Add this line — preferably near other exam-related routes
+app.get('/api/exams/results', schoolController.getStudentExamResults);
 // Reference data routes
 app.get('/api/foundations', schoolController.getFoundations);
 app.get('/api/programs', schoolController.getPrograms);

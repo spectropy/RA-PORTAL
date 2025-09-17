@@ -1025,3 +1025,68 @@ export const loginStudentByStudentId = async (req, res) => {
     return res.status(500).json({ error: "Internal server error" });
   }
 };
+// ✅ GET /api/exams/results?student_id=... — Get all exam results for a student
+export const getStudentExamResults = async (req, res) => {
+  const { student_id } = req.query;
+
+  if (!student_id) {
+    return res.status(400).json({ error: 'student_id is required' });
+  }
+
+  try {
+    const { data: results, error } = await supabase
+      .from('exam_results')
+      .select(`
+        id,
+        exam_id,
+        student_id,
+        physics_marks,
+        chemistry_marks,
+        maths_marks,
+        biology_marks,
+        total_marks,
+        percentage,
+        class_rank,
+        school_rank,
+        all_schools_rank,
+        created_at,
+        exams (
+          exam_pattern,
+          exam_template,
+          program,
+          class,
+          section
+        )
+      `)
+      .eq('student_id', student_id)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching exam results:', error);
+      return res.status(500).json({ error: 'Failed to fetch exam results' });
+    }
+
+    // Format for frontend
+    const formatted = results.map(r => ({
+      id: r.id,
+      exam_id: r.exam_id,
+      date: new Date(r.created_at).toLocaleDateString('en-GB'),
+      exam: r.exams?.exam_pattern || r.exams?.exam_template || 'N/A',
+      program: r.exams?.program || 'N/A',
+      physics: parseFloat(r.physics_marks) || 0,
+      chemistry: parseFloat(r.chemistry_marks) || 0,
+      maths: parseFloat(r.maths_marks) || 0,
+      biology: parseFloat(r.biology_marks) || 0,
+      total: parseFloat(r.total_marks) || 0,
+      percentage: parseFloat(r.percentage) || 0,
+      class_rank: r.class_rank || '-',
+      school_rank: r.school_rank || '-',
+      all_schools_rank: r.all_schools_rank || '-'
+    }));
+
+    return res.json(formatted);
+  } catch (err) {
+    console.error('Unexpected error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
