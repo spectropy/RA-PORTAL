@@ -94,6 +94,9 @@ app.post('/api/exams', schoolController.createExam);
 app.post('/api/exams/:exam_id/results/upload', upload.single('file'), schoolController.uploadExamResults);
 // 👇 Add this line — preferably near other exam-related routes
 app.get('/api/exams/results', schoolController.getStudentExamResults);
+// ✅ Analytics routes for School Owner Dashboard
+app.get('/api/analytics/class-average', schoolController.getClassAverages);
+app.get('/api/analytics/subject-summary', schoolController.getSubjectSummaries);
 // Reference data routes
 app.get('/api/foundations', schoolController.getFoundations);
 app.get('/api/programs', schoolController.getPrograms);

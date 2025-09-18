@@ -626,7 +626,6 @@ export const getAcademicYears = async (req, res) => {
   }
 };
 // ✅ POST /api/exams/:exam_id/results/upload - Upload and process exam results
-// ✅ POST /api/exams/:exam_id/results/upload - Upload and process exam results
 export const uploadExamResults = async (req, res) => {
   const { exam_id } = req.params;
 
@@ -656,7 +655,7 @@ export const uploadExamResults = async (req, res) => {
       const XLSX = await import('xlsx');
       const workbook = XLSX.read(buffer, { type: 'buffer' });
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-      records = XLSX.utils.sheet_to_json(worksheet, { defval: null });
+      records = XLSX.utils.sheet_to_json(worksheet, { defval: null, raw: false });
     } else {
       return res.status(400).json({ error: 'Unsupported file format. Use CSV, XLSX, or XLS.' });
     }
@@ -714,8 +713,29 @@ export const uploadExamResults = async (req, res) => {
       return '';
     };
 
-    // ✅ FIXED COLUMN_MAP — Based on your spec:
-    // C=2, D=3, H=7, I=8, J=9, K=10, S=18, AA=26, AI=34
+    // ✅ STORE FULL ROWS IN UPLOAD TABLE FIRST
+    const uploadData = records.map((r, idx) => ({
+      exam_id: parseInt(exam_id),
+      file_name: req.file.originalname,
+      row_index: idx + 1, // 1-based index
+      data: r // Entire row as object → stored as JSONB
+    }));
+
+    const { error: uploadError } = await supabase
+      .from('upload')
+      .insert(uploadData);
+
+    if (uploadError) {
+      console.error('❌ Error inserting into upload table:', uploadError);
+      return res.status(500).json({
+        error: 'Failed to store raw upload data',
+        details: uploadError.message
+      });
+    }
+
+    console.log(`✅ Stored ${uploadData.length} raw rows in 'upload' table`);
+
+    // ✅ NOW PROCESS FOR exam_results (unchanged logic)
     const COLUMN_MAP = {
       2: 'student_id',       // C → Roll No
       3: 'student_name',     // D → Name
@@ -728,15 +748,9 @@ export const uploadExamResults = async (req, res) => {
       34: 'biology',         // AI → Biology
     };
 
-    // ✅ Process records — SINGLE map, no nesting
     const results = records.map((r, idx) => {
-      // Safety check
-      if (!r) {
-        console.warn(`⚠️ Skipping null/undefined row at index ${idx}`);
-        return null;
-      }
+      if (!r) return null;
 
-      // Map columns
       const mappedRow = {};
       for (const [index, key] of Object.entries(COLUMN_MAP)) {
         if (index in r) {
@@ -747,7 +761,6 @@ export const uploadExamResults = async (req, res) => {
         }
       }
 
-      // Extract values
       const studentId = getString(mappedRow, 'student_id');
       const studentName = getString(mappedRow, 'student_name');
       const physics = getNumber(mappedRow, 'physics');
@@ -758,16 +771,12 @@ export const uploadExamResults = async (req, res) => {
       const wrong = getNumber(mappedRow, 'wrong');
       const unattempted = getNumber(mappedRow, 'unattempted');
 
-      // ✅ HARD CODED: Total Questions = 60 for IIT
-      const totalQuestions = 60;
-
-      // Split name
       const nameParts = studentName.split(' ');
       const firstName = nameParts[0] || '';
       const lastName = nameParts.slice(1).join(' ') || '';
 
-      // Calculate total marks
       const totalMarks = physics + chemistry + maths + biology;
+      const totalQuestions = 60;
       const percentage = totalQuestions > 0 ? ((correct / totalQuestions) * 100).toFixed(2) : 0;
 
       return {
@@ -788,7 +797,7 @@ export const uploadExamResults = async (req, res) => {
         school_rank: '-',
         all_schools_rank: '-'
       };
-    }).filter(Boolean); // Remove any nulls
+    }).filter(Boolean);
 
     if (results.length === 0) {
       return res.status(400).json({ error: 'No valid records processed' });
@@ -805,15 +814,14 @@ export const uploadExamResults = async (req, res) => {
       maths_marks: r.maths_marks,
       biology_marks: r.biology_marks,
       total_questions: r.total_questions,
-      correct_answers: r.correct_answers,    // ← Maps to Supabase column
-      wrong_answers: r.wrong_answers,        // ← Maps to Supabase column
+      correct_answers: r.correct_answers,
+      wrong_answers: r.wrong_answers,
       unattempted: r.unattempted,
       total_marks: r.total_marks,
       percentage: parseFloat(r.percentage),
       created_at: new Date().toISOString()
     }));
 
-    // Insert into Supabase
     const { error: insertError } = await supabase
       .from('exam_results')
       .insert(examResultsData);
@@ -826,21 +834,31 @@ export const uploadExamResults = async (req, res) => {
       });
     }
 
-    // ✅ CALCULATE RANKS
-    const { error: rankError } = await supabase.rpc('calculate_exam_ranks', {
-      p_exam_id: parseInt(exam_id)
-    });
+   // ✅ CALCULATE RANKS
+const { error: rankError } = await supabase.rpc('calculate_exam_ranks', {
+  p_exam_id: parseInt(exam_id)
+});
 
-    if (rankError) {
-      console.error('❌ Error calculating ranks:', rankError);
-    }
+if (rankError) {
+  console.error('❌ Error calculating ranks:', rankError);
+}
+
+// ✅ 🆕 GENERATE ANALYTICS
+const { error: analyticsError } = await supabase.rpc('generate_exam_analytics', {
+  p_exam_id: parseInt(exam_id)
+});
+
+if (analyticsError) {
+  console.error('❌ Error generating analytics:', analyticsError);
+}
+    
 
     // ✅ FETCH FINAL RESULTS WITH RANKS
     const { data: finalResults, error: fetchError } = await supabase
       .from('exam_results')
       .select('*')
       .eq('exam_id', exam_id);
-   
+
     // ✅ SUCCESS RESPONSE
     return res.status(200).json({
       success: true,
@@ -853,7 +871,8 @@ export const uploadExamResults = async (req, res) => {
         exam_pattern: exam.exam_pattern
       },
       results: finalResults || results,
-      count: (finalResults || results).length
+      count: (finalResults || results).length,
+      raw_uploads_stored: uploadData.length // 👈 Added for feedback
     });
 
   } catch (err) {
@@ -1087,6 +1106,55 @@ export const getStudentExamResults = async (req, res) => {
     return res.json(formatted);
   } catch (err) {
     console.error('Unexpected error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+// In your routes file (e.g., analyticsRoutes.js or schoolController.js)
+export const getClassAverages = async (req, res) => {
+  const { school_id } = req.query;
+
+  if (!school_id) {
+    return res.status(400).json({ error: 'school_id is required' });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('classes_average')
+      .select('*')
+      .eq('school_id', school_id)
+      .order('exam_pattern', { ascending: true })
+      .order('class', { ascending: true });
+
+    if (error) throw error;
+
+    return res.json(data);
+  } catch (err) {
+    console.error('Error fetching class averages:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const getSubjectSummaries = async (req, res) => {
+  const { school_id } = req.query;
+
+  if (!school_id) {
+    return res.status(400).json({ error: 'school_id is required' });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('subject_summary')
+      .select('*')
+      .eq('school_id', school_id)
+      .order('exam_pattern', { ascending: true })
+      .order('class', { ascending: true })
+      .order('subject', { ascending: true });
+
+    if (error) throw error;
+
+    return res.json(data);
+  } catch (err) {
+    console.error('Error fetching subject summaries:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
