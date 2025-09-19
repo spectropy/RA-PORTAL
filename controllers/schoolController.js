@@ -1158,3 +1158,182 @@ export const getSubjectSummaries = async (req, res) => {
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
+// ✅ PUT /api/classes/:id - Update existing class
+export const updateClass = async (req, res) => {
+  const { id } = req.params;
+  const {
+    class: className,
+    section,
+    foundation,
+    program,
+    group,
+    num_students
+  } = req.body;
+
+  if (!id) {
+    return res.status(400).json({ error: 'Class ID is required' });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('classes')
+      .update({
+        class: className,
+        section,
+        foundation,
+        program,
+        group,
+        num_students: num_students || 0
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      return res.status(400).json({ error: error.message || 'Failed to update class' });
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: 'Class not found' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Class updated successfully',
+      data
+    });
+  } catch (err) {
+    console.error('Update class error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// ✅ DELETE /api/classes/:id - Delete class
+export const deleteClass = async (req, res) => {
+  const { id } = req.params;
+
+  if (!id) {
+    return res.status(400).json({ error: 'Class ID is required' });
+  }
+
+  try {
+    // Optional: Delete associated teacher assignments first
+    const { error: assignmentDeleteError } = await supabase
+      .from('teacher_assignments')
+      .delete()
+      .match({ class: id }); // ❗ If your assignment links by class ID
+
+    // OR if assignment links by class NAME + SECTION:
+    // First get the class
+    const { data: cls, error: classFetchError } = await supabase
+      .from('classes')
+      .select('class, section, school_id')
+      .eq('id', id)
+      .single();
+
+    if (classFetchError || !cls) {
+      return res.status(404).json({ error: 'Class not found' });
+    }
+
+    // Delete assignments linked to this class-section
+    const { error: assignmentDeleteError2 } = await supabase
+      .from('teacher_assignments')
+      .delete()
+      .match({ class: cls.class, section: cls.section, school_id: cls.school_id });
+
+    if (assignmentDeleteError2) {
+      console.warn('Failed to delete teacher assignments:', assignmentDeleteError2.message);
+      // Don't block class deletion
+    }
+
+    // Now delete the class
+    const { error: classDeleteError } = await supabase
+      .from('classes')
+      .delete()
+      .eq('id', id);
+
+    if (classDeleteError) {
+      return res.status(400).json({ error: classDeleteError.message || 'Failed to delete class' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Class and associated assignments deleted successfully'
+    });
+  } catch (err) {
+    console.error('Delete class error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// ✅ PUT /api/teacher-assignments/:id - Update teacher assignment
+export const updateTeacherAssignment = async (req, res) => {
+  const { id } = req.params;
+  const {
+    class: className,
+    section,
+    subject
+  } = req.body;
+
+  if (!id) {
+    return res.status(400).json({ error: 'Assignment ID is required' });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('teacher_assignments')
+      .update({
+        class: className,
+        section,
+        subject
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      return res.status(400).json({ error: error.message || 'Failed to update assignment' });
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: 'Assignment not found' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Teacher assignment updated successfully',
+      data
+    });
+  } catch (err) {
+    console.error('Update assignment error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// ✅ DELETE /api/teacher-assignments/:id - Delete teacher assignment
+export const deleteTeacherAssignment = async (req, res) => {
+  const { id } = req.params;
+
+  if (!id) {
+    return res.status(400).json({ error: 'Assignment ID is required' });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('teacher_assignments')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      return res.status(400).json({ error: error.message || 'Failed to delete assignment' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Teacher assignment deleted successfully'
+    });
+  } catch (err) {
+    console.error('Delete assignment error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};

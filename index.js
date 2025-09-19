@@ -68,13 +68,16 @@ app.use('/api/upload-schools', uploadRoutes);
 
 // Classes routes
 app.post('/api/classes', schoolController.createClass);
+app.put('/api/classes/:id', schoolController.updateClass);           // ✅ ADDED
+app.delete('/api/classes/:id', schoolController.deleteClass); 
 
 // Teachers routes
 app.post('/api/teachers', schoolController.createTeacher);
 
 // Teacher assignments routes
 app.post('/api/teacher-assignments', schoolController.assignTeacherToClass);
-
+app.put('/api/teacher-assignments/:id', schoolController.updateTeacherAssignment);           // ✅ ADDED
+app.delete('/api/teacher-assignments/:id', schoolController.deleteTeacherAssignment); 
 // Students upload route
 app.post('/api/schools/:school_id/students/upload', 
   upload.single('file'), 
