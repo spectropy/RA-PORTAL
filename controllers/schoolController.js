@@ -569,20 +569,37 @@ export const createExam = async (req, res) => {
 // ✅ GET /api/exams - Get all exams — REQUIRED BY FRONTEND
 export const getExams = async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('exams')
-      .select('*')
-      .order('created_at', { ascending: false });
- 
+    console.log('🔍 getExams query params:', req.query); // 👈 ADD THIS
+
+    let query = supabase.from('exams').select('*');
+    
+    if (req.query.school_id) {
+      query = query.eq('school_id', req.query.school_id);
+    }
+    if (req.query.exam_pattern) {
+      query = query.eq('exam_pattern', req.query.exam_pattern);
+    }
+    if (req.query.class) {
+      query = query.eq('class', req.query.class);
+    }
+    if (req.query.section) {
+      query = query.eq('section', req.query.section);
+    }
+    query = query.order('created_at', { ascending: false });
+
+    const { data, error } = await query;
     if (error) return res.status(500).json({ error: 'Database query failed: ' + error.message });
- 
+
+    console.log('✅ getExams found:', data.length, 'records'); // 👈 ADD THIS
+    console.log('📋 First record:', data[0]); // 👈 ADD THIS
+
     return res.status(200).json(data);
   } catch (error) {
     console.error('Error fetching exams:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
- 
+
 // ✅ GET /api/foundations - MUST MATCH FRONTEND
 export const getFoundations = (req, res) => {
   const FOUNDATIONS = [
@@ -1334,6 +1351,76 @@ export const deleteTeacherAssignment = async (req, res) => {
     });
   } catch (err) {
     console.error('Delete assignment error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+// ✅ GET /api/exams/:exam_id/results — Fetch existing exam results (for viewing)
+export const getExamResults = async (req, res) => {
+  const { exam_id } = req.params;
+
+  if (!exam_id) {
+    return res.status(400).json({ error: 'Exam ID is required' });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('exam_results')
+      .select(`
+        student_id,
+        first_name,
+        last_name,
+        total_questions,
+        correct_answers,
+        wrong_answers,
+        unattempted,
+        physics_marks,
+        chemistry_marks,
+        maths_marks,
+        biology_marks,
+        total_marks,
+        percentage,
+        class_rank,
+        school_rank,
+        all_schools_rank
+      `)
+      .eq('exam_id', exam_id)
+      .order('percentage', { ascending: false });
+
+    if (error) {
+      console.error('Supabase error fetching exam results:', error);
+      return res.status(500).json({ error: 'Failed to fetch exam results' });
+    }
+
+    res.json(data || []);
+  } catch (err) {
+    console.error('Server error in getExamResults:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// ✅ PUT /api/schools/:school_id/logo - Update school logo
+export const updateSchoolLogo = async (req, res) => {
+  const { school_id } = req.params;
+  const { logo_url } = req.body;
+
+  if (!school_id || !logo_url) {
+    return res.status(400).json({ error: 'school_id and logo_url are required' });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('schools')
+      .update({ logo_url })
+      .eq('school_id', school_id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'School not found' });
+
+    return res.json({ success: true, data });
+  } catch (err) {
+    console.error('Update school logo error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
