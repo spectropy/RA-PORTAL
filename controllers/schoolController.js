@@ -519,53 +519,52 @@ export const uploadStudents = async (req, res) => {
     });
   }
 };
- 
-// ✅ POST /api/exams - Create exam — MATCHES FRONTEND
+// ✅ POST /api/exams - Create exam — NOW INCLUDES exam_date
 export const createExam = async (req, res) => {
   try {
     const {
       school_id,
       program,
-      exam_template,
       exam_pattern,
       class: examClass,
       section: examSection,
-      // ❌ REMOVED: exam_name — frontend doesn't send it
-      // ❌ REMOVED: created_at — let DB handle it
+      exam_date // 👈 ADD THIS — comes from frontend
     } = req.body;
- 
+
+    // Validate required fields
     if (!school_id) return res.status(400).json({ error: "Missing required field: school_id" });
     if (!program) return res.status(400).json({ error: "Missing required field: program" });
-    if (!exam_template) return res.status(400).json({ error: "Missing required field: exam_template" });
     if (!exam_pattern) return res.status(400).json({ error: "Missing required field: exam_pattern" });
     if (!examClass) return res.status(400).json({ error: "Missing required field: class" });
     if (!examSection) return res.status(400).json({ error: "Missing required field: section" });
+    // 👇 Optional: Validate exam_date format (YYYY-MM-DD)
+    if (exam_date && isNaN(Date.parse(exam_date))) {
+      return res.status(400).json({ error: "Invalid exam_date format. Use YYYY-MM-DD." });
+    }
 
+    // Insert into DB — WITH exam_date
     const { data, error } = await supabase
       .from('exams')
       .insert([
         {
           school_id,
           program,
-          exam_template,
           exam_pattern,
           class: examClass,
-          section: examSection, 
-          // ✅ created_at uses DEFAULT NOW() from table
+          section: examSection,
+          exam_date: exam_date || null // 👈 Store it — default to null if not provided
         }
       ])
       .select()
       .single();
- 
+
     if (error) return res.status(500).json({ error: 'Database insert failed: ' + error.message });
- 
     return res.status(201).json(data);
   } catch (error) {
     console.error('Error creating exam:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
- 
 // ✅ GET /api/exams - Get all exams — REQUIRED BY FRONTEND
 export const getExams = async (req, res) => {
   try {
@@ -701,7 +700,7 @@ export const uploadExamResults = async (req, res) => {
     // Fetch exam details
     const { data: exam, error: examError } = await supabase
       .from('exams')
-      .select('school_id, class, program, exam_template, exam_pattern')
+      .select('school_id, class, program, exam_pattern')
       .eq('id', exam_id)
       .single();
 
@@ -884,7 +883,6 @@ if (analyticsError) {
         school_id: exam.school_id,
         class: exam.class,
         program: exam.program,
-        exam_template: exam.exam_template,
         exam_pattern: exam.exam_pattern
       },
       results: finalResults || results,
@@ -1088,7 +1086,6 @@ export const getStudentExamResults = async (req, res) => {
         created_at,
         exams (
           exam_pattern,
-          exam_template,
           program,
           class,
           section
@@ -1107,7 +1104,7 @@ export const getStudentExamResults = async (req, res) => {
       id: r.id,
       exam_id: r.exam_id,
       date: new Date(r.created_at).toLocaleDateString('en-GB'),
-      exam: r.exams?.exam_pattern || r.exams?.exam_template || 'N/A',
+      exam: r.exams?.exam_pattern || 'N/A',
       program: r.exams?.program || 'N/A',
       physics: parseFloat(r.physics_marks) || 0,
       chemistry: parseFloat(r.chemistry_marks) || 0,
