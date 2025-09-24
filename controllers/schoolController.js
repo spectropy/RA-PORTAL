@@ -1088,7 +1088,8 @@ export const getStudentExamResults = async (req, res) => {
           exam_pattern,
           program,
           class,
-          section
+          section,
+          exam_date 
         )
       `)
       .eq('student_id', student_id)
@@ -1103,7 +1104,7 @@ export const getStudentExamResults = async (req, res) => {
     const formatted = results.map(r => ({
       id: r.id,
       exam_id: r.exam_id,
-      date: new Date(r.created_at).toLocaleDateString('en-GB'),
+      date: r.exams?.exam_date || '—', 
       exam: r.exams?.exam_pattern || 'N/A',
       program: r.exams?.program || 'N/A',
       physics: parseFloat(r.physics_marks) || 0,
@@ -1237,7 +1238,6 @@ export const deleteClass = async (req, res) => {
       .delete()
       .match({ class: id }); // ❗ If your assignment links by class ID
 
-    // OR if assignment links by class NAME + SECTION:
     // First get the class
     const { data: cls, error: classFetchError } = await supabase
       .from('classes')
