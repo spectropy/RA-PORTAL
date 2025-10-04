@@ -643,14 +643,27 @@ export const getAcademicYears = async (req, res) => {
 };
 // ✅ POST /api/exams/:exam_id/results/upload - Upload and process exam results
 export const uploadExamResults = async (req, res) => {
-  const { exam_id } = req.params;
-
-  if (!exam_id) {
-    return res.status(400).json({ error: 'Exam ID is required' });
-  }
+  const {
+    school_id,
+    program,
+    exam_pattern,
+    class: examClass,
+    section: examSection,
+    exam_date,
+    max_marks_physics,
+    max_marks_maths,
+    max_marks_chemistry,
+    max_marks_biology
+  } = req.body;
 
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  if (!school_id || !program || !exam_pattern || !examClass || !examSection) {
+    return res.status(400).json({ 
+      error: 'Missing exam context. Please fill all form fields.' 
+    });
   }
 
   try {
@@ -658,7 +671,6 @@ export const uploadExamResults = async (req, res) => {
     const buffer = req.file.buffer;
     const filename = req.file.originalname.toLowerCase();
 
-    // Parse file
     if (filename.endsWith('.csv')) {
       const { parse } = await import('csv-parse/sync');
       records = parse(buffer.toString('utf-8'), {
@@ -680,35 +692,36 @@ export const uploadExamResults = async (req, res) => {
       return res.status(400).json({ error: 'No data found in file' });
     }
 
-    // Skip first row if it looks like a header
-    if (
-      records.length > 0 &&
-      (
-        (records[0]['2'] && String(records[0]['2']).toLowerCase().includes('roll')) ||
-        (records[0]['3'] && String(records[0]['3']).toLowerCase().includes('name')) ||
-        (records[0]['10'] === '0' && records[0]['11'] === '0' && records[0]['12'] === '0')
-      )
-    ) {
-      console.log('🗑️ Skipping header row:', records[0]);
-      records = records.slice(1);
-    }
+    // Skip first row (column indices)
+if (records.length > 0) {
+  console.log('Skipping first row (column indices):', records[0]);
+  records = records.slice(1);
+}
 
-    // 🔍 DEBUG: Log first 3 rows
-    console.log('📄 First 3 rows from Excel:', records.slice(0, 3));
-    console.log('Exam ID:', exam_id);
+// Skip second row if it's a header
+if (records.length > 0) {
+  const headerRow = records[0];
+  if (
+    (headerRow['2'] && typeof headerRow['2'] === 'string' && headerRow['2'].toLowerCase().includes('roll')) ||
+    (headerRow['3'] && typeof headerRow['3'] === 'string' && headerRow['3'].toLowerCase().includes('name'))
+  ) {
+    console.log('Skipping header row:', headerRow);
+    records = records.slice(1);
+  }
+}
 
-    // Fetch exam details
-    const { data: exam, error: examError } = await supabase
-      .from('exams')
-      .select('school_id, class, program, exam_pattern')
-      .eq('id', exam_id)
-      .single();
+    const COLUMN_MAP = {
+      2: 'student_id',
+      3: 'student_name',
+      7: 'correct',
+      8: 'wrong',
+      9: 'unattempted',
+      10: 'physics',
+      18: 'chemistry',
+      26: 'maths',
+      34: 'biology',
+    };
 
-    if (examError || !exam) {
-      return res.status(404).json({ error: 'Exam not found' });
-    }
-
-    // 🧮 Helper to safely extract number
     const getNumber = (row, ...keys) => {
       for (let key of keys) {
         if (key in row && row[key] != null && row[key] !== '') {
@@ -719,7 +732,6 @@ export const uploadExamResults = async (req, res) => {
       return 0;
     };
 
-    // 🧍 Helper to get string
     const getString = (row, ...keys) => {
       for (let key of keys) {
         if (key in row && row[key] != null) {
@@ -729,55 +741,20 @@ export const uploadExamResults = async (req, res) => {
       return '';
     };
 
-    // ✅ STORE FULL ROWS IN UPLOAD TABLE FIRST
-    const uploadData = records.map((r, idx) => ({
-      exam_id: parseInt(exam_id),
-      file_name: req.file.originalname,
-      row_index: idx + 1, // 1-based index
-      data: r // Entire row as object → stored as JSONB
-    }));
-
-    const { error: uploadError } = await supabase
-      .from('upload')
-      .insert(uploadData);
-
-    if (uploadError) {
-      console.error('❌ Error inserting into upload table:', uploadError);
-      return res.status(500).json({
-        error: 'Failed to store raw upload data',
-        details: uploadError.message
-      });
-    }
-
-    console.log(`✅ Stored ${uploadData.length} raw rows in 'upload' table`);
-
-    // ✅ NOW PROCESS FOR exam_results (unchanged logic)
-    const COLUMN_MAP = {
-      2: 'student_id',       // C → Roll No
-      3: 'student_name',     // D → Name
-      7: 'correct',          // H → Correct
-      8: 'wrong',            // I → Wrong
-      9: 'unattempted',      // J → Unattempted
-      10: 'physics',         // K → Physics
-      18: 'chemistry',       // S → Chemistry
-      26: 'maths',           // AA → Maths
-      34: 'biology',         // AI → Biology
-    };
-
-    const results = records.map((r, idx) => {
+    // ✅ Build raw upload rows (to go into `upload` table)
+    const uploadRows = records.map((r, index) => {
       if (!r) return null;
 
       const mappedRow = {};
-      for (const [index, key] of Object.entries(COLUMN_MAP)) {
-        if (index in r) {
-          mappedRow[key] = r[index];
-        } else {
-          console.warn(`⚠️ Column index ${index} not found in row ${idx + 1} for key "${key}"`);
-          mappedRow[key] = null;
-        }
+      for (const [colIndex, key] of Object.entries(COLUMN_MAP)) {
+        mappedRow[key] = colIndex in r ? r[colIndex] : null;
       }
 
       const studentId = getString(mappedRow, 'student_id');
+      if (!studentId || studentId.trim() === '') {
+      console.warn(`Skipping invalid row ${index + 1}: student_id is empty`);
+      return null;
+      }
       const studentName = getString(mappedRow, 'student_name');
       const physics = getNumber(mappedRow, 'physics');
       const chemistry = getNumber(mappedRow, 'chemistry');
@@ -795,7 +772,21 @@ export const uploadExamResults = async (req, res) => {
       const totalQuestions = 60;
       const percentage = totalQuestions > 0 ? ((correct / totalQuestions) * 100).toFixed(2) : 0;
 
-      return {
+      // ⚠️ This object will be stored as JSONB in `upload.data`
+      const rowData = {
+        // Exam context from FORM
+        school_id,
+        program,
+        exam_pattern,
+        class: examClass,
+        section: examSection,
+        exam_date: exam_date || null,
+        max_marks_physics: parseInt(max_marks_physics) || 50,
+        max_marks_maths: parseInt(max_marks_maths) || 50,
+        max_marks_chemistry: parseInt(max_marks_chemistry) || 50,
+        max_marks_biology: parseInt(max_marks_biology) || 0,
+
+        // Student data from Excel
         student_id: studentId,
         first_name: firstName,
         last_name: lastName,
@@ -808,90 +799,87 @@ export const uploadExamResults = async (req, res) => {
         maths_marks: maths,
         biology_marks: biology,
         total_marks: totalMarks,
-        percentage: percentage,
+        percentage: parseFloat(percentage),
+        // Note: ranks will be filled later by trigger/function
         class_rank: '-',
         school_rank: '-',
-        all_schools_rank: '-'
+        all_schools_rank: '-',
+        created_at: new Date().toISOString()
+      };
+
+      return {
+        file_name: req.file.originalname,
+        row_index: index + 1, // 1-based index
+        data: rowData // This will be inserted as JSONB
       };
     }).filter(Boolean);
 
-    if (results.length === 0) {
+    if (uploadRows.length === 0) {
       return res.status(400).json({ error: 'No valid records processed' });
     }
 
-    // ✅ STORE IN DATABASE
-    const examResultsData = results.map(r => ({
-      exam_id: parseInt(exam_id),
-      student_id: r.student_id,
-      first_name: r.first_name,
-      last_name: r.last_name,
-      physics_marks: r.physics_marks,
-      chemistry_marks: r.chemistry_marks,
-      maths_marks: r.maths_marks,
-      biology_marks: r.biology_marks,
-      total_questions: r.total_questions,
-      correct_answers: r.correct_answers,
-      wrong_answers: r.wrong_answers,
-      unattempted: r.unattempted,
-      total_marks: r.total_marks,
-      percentage: parseFloat(r.percentage),
-      created_at: new Date().toISOString()
-    }));
-
+        // ✅ INSERT INTO `upload` TABLE
     const { error: insertError } = await supabase
-      .from('exam_results')
-      .insert(examResultsData);
+      .from('upload')
+      .insert(uploadRows);
 
     if (insertError) {
-      console.error('❌ Error inserting exam results:', insertError);
+      console.error('Upload table insert error:', insertError);
       return res.status(500).json({
-        error: 'Database insert failed',
+        error: 'Failed to save raw upload data',
         details: insertError.message
       });
     }
 
-   // ✅ CALCULATE RANKS
-const { error: rankError } = await supabase.rpc('calculate_exam_ranks', {
-  p_exam_id: parseInt(exam_id)
-});
+    // ✅ STEP 1: Recalculate ranks (safe: not in a trigger)
+    const { error: rankError } = await supabase.rpc('calculate_ranks');
+    if (rankError) {
+      console.warn('⚠️ Rank recalculation failed:', rankError);
+      // Don't fail the whole request — proceed with '-' ranks if needed
+    }
 
-if (rankError) {
-  console.error('❌ Error calculating ranks:', rankError);
-}
+    // ✅ STEP 2: Fetch results (now with real ranks if recalc succeeded)
+    const { data: results, error: fetchError } = await supabase
+      .from('exams')
+      .select(`
+        student_id,
+        first_name,
+        last_name,
+        total_questions,
+        correct_answers,
+        wrong_answers,
+        unattempted,
+        physics_marks,
+        chemistry_marks,
+        maths_marks,
+        biology_marks,
+        total_marks,
+        percentage,
+        class_rank,
+        school_rank,
+        all_schools_rank
+      `)
+      .eq('school_id', school_id)
+      .eq('program', program)
+      .eq('exam_pattern', exam_pattern)
+      .eq('class', examClass)
+      .eq('section', examSection)
+      .eq('exam_date', exam_date || null)
+      .order('percentage', { ascending: false });
 
-// ✅ 🆕 GENERATE ANALYTICS
-const { error: analyticsError } = await supabase.rpc('generate_exam_analytics', {
-  p_exam_id: parseInt(exam_id)
-});
+    if (fetchError) {
+      console.warn('⚠️ Could not fetch results after upload:', fetchError);
+    }
 
-if (analyticsError) {
-  console.error('❌ Error generating analytics:', analyticsError);
-}
-    
-
-    // ✅ FETCH FINAL RESULTS WITH RANKS
-    const { data: finalResults, error: fetchError } = await supabase
-      .from('exam_results')
-      .select('*')
-      .eq('exam_id', exam_id);
-
-    // ✅ SUCCESS RESPONSE
+    // ✅ Return results to frontend
     return res.status(200).json({
       success: true,
-      exam: {
-        id: exam_id,
-        school_id: exam.school_id,
-        class: exam.class,
-        program: exam.program,
-        exam_pattern: exam.exam_pattern
-      },
-      results: finalResults || results,
-      count: (finalResults || results).length,
-      raw_uploads_stored: uploadData.length // 👈 Added for feedback
+      count: uploadRows.length,
+      results: results || []
     });
 
   } catch (err) {
-    console.error('💥 Error processing exam results:', err);
+    console.error('Upload error:', err);
     return res.status(500).json({
       error: 'Failed to process file',
       details: err.message
@@ -1062,17 +1050,15 @@ export const loginStudentByStudentId = async (req, res) => {
 // ✅ GET /api/exams/results?student_id=... — Get all exam results for a student
 export const getStudentExamResults = async (req, res) => {
   const { student_id } = req.query;
-
   if (!student_id) {
     return res.status(400).json({ error: 'student_id is required' });
   }
-
   try {
+    // ✅ Query the `exams` table (which now stores student-level results)
     const { data: results, error } = await supabase
-      .from('exam_results')
+      .from('exams')
       .select(`
         id,
-        exam_id,
         student_id,
         physics_marks,
         chemistry_marks,
@@ -1084,29 +1070,28 @@ export const getStudentExamResults = async (req, res) => {
         school_rank,
         all_schools_rank,
         created_at,
-        exams (
-          exam_pattern,
-          program,
-          class,
-          section,
-          exam_date 
-        )
+        school_id,
+        program,
+        exam_pattern,
+        class,
+        section,
+        exam_date
       `)
       .eq('student_id', student_id)
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('Error fetching exam results:', error);
+      console.error('Error fetching exam results from exams table:', error);
       return res.status(500).json({ error: 'Failed to fetch exam results' });
     }
 
-    // Format for frontend
+    // Format for frontend (same as before)
     const formatted = results.map(r => ({
       id: r.id,
-      exam_id: r.exam_id,
-      date: r.exams?.exam_date || '—', 
-      exam: r.exams?.exam_pattern || 'N/A',
-      program: r.exams?.program || 'N/A',
+      exam_id: r.id, // since each row is a result
+      date: r.exam_date || '—',
+      exam: r.exam_pattern || 'N/A',
+      program: r.program || 'N/A',
       physics: parseFloat(r.physics_marks) || 0,
       chemistry: parseFloat(r.chemistry_marks) || 0,
       maths: parseFloat(r.maths_marks) || 0,
@@ -1120,59 +1105,11 @@ export const getStudentExamResults = async (req, res) => {
 
     return res.json(formatted);
   } catch (err) {
-    console.error('Unexpected error:', err);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-};
-// In your routes file (e.g., analyticsRoutes.js or schoolController.js)
-export const getClassAverages = async (req, res) => {
-  const { school_id } = req.query;
-
-  if (!school_id) {
-    return res.status(400).json({ error: 'school_id is required' });
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from('classes_average')
-      .select('*')
-      .eq('school_id', school_id)
-      .order('exam_pattern', { ascending: true })
-      .order('class', { ascending: true });
-
-    if (error) throw error;
-
-    return res.json(data);
-  } catch (err) {
-    console.error('Error fetching class averages:', err);
+    console.error('Unexpected error in getStudentExamResults:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
 
-export const getSubjectSummaries = async (req, res) => {
-  const { school_id } = req.query;
-
-  if (!school_id) {
-    return res.status(400).json({ error: 'school_id is required' });
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from('subject_summary')
-      .select('*')
-      .eq('school_id', school_id)
-      .order('exam_pattern', { ascending: true })
-      .order('class', { ascending: true })
-      .order('subject', { ascending: true });
-
-    if (error) throw error;
-
-    return res.json(data);
-  } catch (err) {
-    console.error('Error fetching subject summaries:', err);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-};
 // ✅ PUT /api/classes/:id - Update existing class
 export const updateClass = async (req, res) => {
   const { id } = req.params;

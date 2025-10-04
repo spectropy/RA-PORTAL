@@ -1,3 +1,4 @@
+
 // index.js
 import express from 'express';
 import cors from 'cors';
@@ -98,8 +99,6 @@ app.get('/api/exams/:exam_id/results', schoolController.getExamResults);
 app.post('/api/exams/:exam_id/results/upload', upload.single('file'), schoolController.uploadExamResults);
 app.get('/api/exams/results', schoolController.getStudentExamResults);
 app.put('/api/schools/:school_id/logo', schoolController.updateSchoolLogo);
-app.get('/api/analytics/class-average', schoolController.getClassAverages);
-app.get('/api/analytics/subject-summary', schoolController.getSubjectSummaries);
 // Reference data routes
 app.get('/api/foundations', schoolController.getFoundations);
 app.get('/api/programs', schoolController.getPrograms);
