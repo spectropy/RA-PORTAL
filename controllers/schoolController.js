@@ -709,6 +709,28 @@ if (records.length > 0) {
     records = records.slice(1);
   }
 }
+ // ✅ 🔒 CHECK FOR DUPLICATE EXAM BEFORE PROCESSING RECORDS
+    const { data: existingExams, error: checkError } = await supabase
+      .from('exams')
+      .select('id')
+      .eq('school_id', school_id)
+      .eq('program', program)
+      .eq('exam_pattern', exam_pattern)
+      .eq('class', examClass)
+      .eq('section', examSection)
+      .eq('exam_date', exam_date || null)
+      .limit(1);
+
+    if (checkError) {
+      console.error('Error checking for existing exam:', checkError);
+      return res.status(500).json({ error: 'Failed to verify exam uniqueness' });
+    }
+
+    if (existingExams && existingExams.length > 0) {
+      return res.status(409).json({
+        error: 'This exam has already been registered and results uploaded. Duplicate uploads are not allowed.'
+      });
+    }
 
     const COLUMN_MAP = {
       2: 'student_id',
@@ -769,12 +791,16 @@ if (records.length > 0) {
       const lastName = nameParts.slice(1).join(' ') || '';
 
       const totalMarks = physics + chemistry + maths + biology;
+      const maxPhysics = parseInt(max_marks_physics);
+      const maxChemistry = parseInt(max_marks_chemistry);
+      const maxMaths = parseInt(max_marks_maths);
+      const maxBiology = parseInt(max_marks_biology);
+      const total_max_marks = maxPhysics + maxChemistry + maxMaths + maxBiology;
       const totalQuestions = 60;
-      const percentage = totalQuestions > 0 ? ((correct / totalQuestions) * 100).toFixed(2) : 0;
+      const percentage = total_max_marks > 0 ? parseFloat(((totalMarks / total_max_marks) * 100).toFixed(2)): 0;
 
       // ⚠️ This object will be stored as JSONB in `upload.data`
       const rowData = {
-        // Exam context from FORM
         school_id,
         program,
         exam_pattern,
@@ -1075,7 +1101,11 @@ export const getStudentExamResults = async (req, res) => {
         exam_pattern,
         class,
         section,
-        exam_date
+        exam_date,
+        max_marks_physics,
+        max_marks_chemistry,
+        max_marks_maths,
+        max_marks_biology
       `)
       .eq('student_id', student_id)
       .order('created_at', { ascending: false });
@@ -1086,22 +1116,27 @@ export const getStudentExamResults = async (req, res) => {
     }
 
     // Format for frontend (same as before)
-    const formatted = results.map(r => ({
-      id: r.id,
-      exam_id: r.id, // since each row is a result
-      date: r.exam_date || '—',
-      exam: r.exam_pattern || 'N/A',
-      program: r.program || 'N/A',
-      physics: parseFloat(r.physics_marks) || 0,
-      chemistry: parseFloat(r.chemistry_marks) || 0,
-      maths: parseFloat(r.maths_marks) || 0,
-      biology: parseFloat(r.biology_marks) || 0,
-      total: parseFloat(r.total_marks) || 0,
-      percentage: parseFloat(r.percentage) || 0,
-      class_rank: r.class_rank || '-',
-      school_rank: r.school_rank || '-',
-      all_schools_rank: r.all_schools_rank || '-'
-    }));
+   const formatted = results.map(r => ({
+  id: r.id,
+  exam_id: r.id,
+  date: r.exam_date || '—',
+  exam: r.exam_pattern || 'N/A',
+  exam_pattern: r.exam_pattern || 'N/A',  // 👈 FOR GROUPING LOGIC (critical!)
+  program: r.program || 'N/A',
+  physics_marks: parseFloat(r.physics_marks) || 0,
+  chemistry_marks: parseFloat(r.chemistry_marks) || 0,
+  maths_marks: parseFloat(r.maths_marks) || 0,
+  biology_marks: parseFloat(r.biology_marks) || 0,
+  max_marks_physics: parseInt(r.max_marks_physics) || 50,
+  max_marks_chemistry: parseInt(r.max_marks_chemistry) || 50,
+  max_marks_maths: parseInt(r.max_marks_maths) || 50,
+  max_marks_biology: parseInt(r.max_marks_biology) || 0,
+  total: parseFloat(r.total_marks) || 0,
+  percentage: parseFloat(r.percentage) || 0,
+  class_rank: r.class_rank || '-',
+  school_rank: r.school_rank || '-',
+  all_schools_rank: r.all_schools_rank || '-'
+}));
 
     return res.json(formatted);
   } catch (err) {
