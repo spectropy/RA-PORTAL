@@ -642,6 +642,7 @@ export const getAcademicYears = async (req, res) => {
   }
 };
 // ✅ POST /api/exams/:exam_id/results/upload - Upload and process exam results
+// ✅ POST /api/exams/:exam_id/results/upload - Upload and process exam results
 export const uploadExamResults = async (req, res) => {
   const {
     school_id,
@@ -693,23 +694,24 @@ export const uploadExamResults = async (req, res) => {
     }
 
     // Skip first row (column indices)
-if (records.length > 0) {
-  console.log('Skipping first row (column indices):', records[0]);
-  records = records.slice(1);
-}
+    if (records.length > 0) {
+      console.log('Skipping first row (column indices):', records[0]);
+      records = records.slice(1);
+    }
 
-// Skip second row if it's a header
-if (records.length > 0) {
-  const headerRow = records[0];
-  if (
-    (headerRow['2'] && typeof headerRow['2'] === 'string' && headerRow['2'].toLowerCase().includes('roll')) ||
-    (headerRow['3'] && typeof headerRow['3'] === 'string' && headerRow['3'].toLowerCase().includes('name'))
-  ) {
-    console.log('Skipping header row:', headerRow);
-    records = records.slice(1);
-  }
-}
- // ✅ 🔒 CHECK FOR DUPLICATE EXAM BEFORE PROCESSING RECORDS
+    // Skip second row if it's a header
+    if (records.length > 0) {
+      const headerRow = records[0];
+      if (
+        (headerRow['2'] && typeof headerRow['2'] === 'string' && headerRow['2'].toLowerCase().includes('roll')) ||
+        (headerRow['3'] && typeof headerRow['3'] === 'string' && headerRow['3'].toLowerCase().includes('name'))
+      ) {
+        console.log('Skipping header row:', headerRow);
+        records = records.slice(1);
+      }
+    }
+
+    // ✅ 🔒 CHECK FOR DUPLICATE EXAM BEFORE PROCESSING RECORDS
     const { data: existingExams, error: checkError } = await supabase
       .from('exams')
       .select('id')
@@ -774,8 +776,8 @@ if (records.length > 0) {
 
       const studentId = getString(mappedRow, 'student_id');
       if (!studentId || studentId.trim() === '') {
-      console.warn(`Skipping invalid row ${index + 1}: student_id is empty`);
-      return null;
+        console.warn(`Skipping invalid row ${index + 1}: student_id is empty`);
+        return null;
       }
       const studentName = getString(mappedRow, 'student_name');
       const physics = getNumber(mappedRow, 'physics');
@@ -797,7 +799,7 @@ if (records.length > 0) {
       const maxBiology = parseInt(max_marks_biology);
       const total_max_marks = maxPhysics + maxChemistry + maxMaths + maxBiology;
       const totalQuestions = 60;
-      const percentage = total_max_marks > 0 ? parseFloat(((totalMarks / total_max_marks) * 100).toFixed(2)): 0;
+      const percentage = total_max_marks > 0 ? parseFloat(((totalMarks / total_max_marks) * 100).toFixed(2)) : 0;
 
       // ⚠️ This object will be stored as JSONB in `upload.data`
       const rowData = {
@@ -844,7 +846,7 @@ if (records.length > 0) {
       return res.status(400).json({ error: 'No valid records processed' });
     }
 
-        // ✅ INSERT INTO `upload` TABLE
+    // ✅ INSERT INTO `upload` TABLE
     const { error: insertError } = await supabase
       .from('upload')
       .insert(uploadRows);
@@ -864,7 +866,25 @@ if (records.length > 0) {
       // Don't fail the whole request — proceed with '-' ranks if needed
     }
 
-    // ✅ STEP 2: Fetch results (now with real ranks if recalc succeeded)
+    // ✅ STEP 2: Recalculate exam-level averages
+    const { error: examAvgError } = await supabase.rpc('calculate_exam_averages');
+    if (examAvgError) {
+      console.warn('⚠️ Exam averages recalculation failed:', examAvgError);
+    }
+
+    // ✅ STEP 3: Recalculate grade-level averages
+    const { error: gradeAvgError } = await supabase.rpc('calculate_grade_averages');
+    if (gradeAvgError) {
+      console.warn('⚠️ Grade averages recalculation failed:', gradeAvgError);
+    }
+
+    // ✅ STEP 4: Recalculate grade ranks
+    const { error: gradeRankError } = await supabase.rpc('calculate_grade_ranks');
+    if (gradeRankError) {
+      console.warn('⚠️ Grade rank recalculation failed:', gradeRankError);
+    }
+
+    // ✅ STEP 4: Fetch results (now with real ranks and averages if recalc succeeded)
     const { data: results, error: fetchError } = await supabase
       .from('exams')
       .select(`
@@ -1321,49 +1341,6 @@ export const deleteTeacherAssignment = async (req, res) => {
   } catch (err) {
     console.error('Delete assignment error:', err);
     return res.status(500).json({ error: 'Internal server error' });
-  }
-};
-// ✅ GET /api/exams/:exam_id/results — Fetch existing exam results (for viewing)
-export const getExamResults = async (req, res) => {
-  const { exam_id } = req.params;
-
-  if (!exam_id) {
-    return res.status(400).json({ error: 'Exam ID is required' });
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from('exam_results')
-      .select(`
-        student_id,
-        first_name,
-        last_name,
-        total_questions,
-        correct_answers,
-        wrong_answers,
-        unattempted,
-        physics_marks,
-        chemistry_marks,
-        maths_marks,
-        biology_marks,
-        total_marks,
-        percentage,
-        class_rank,
-        school_rank,
-        all_schools_rank
-      `)
-      .eq('exam_id', exam_id)
-      .order('percentage', { ascending: false });
-
-    if (error) {
-      console.error('Supabase error fetching exam results:', error);
-      return res.status(500).json({ error: 'Failed to fetch exam results' });
-    }
-
-    res.json(data || []);
-  } catch (err) {
-    console.error('Server error in getExamResults:', err);
-    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
