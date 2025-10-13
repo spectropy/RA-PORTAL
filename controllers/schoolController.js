@@ -642,7 +642,6 @@ export const getAcademicYears = async (req, res) => {
   }
 };
 // ✅ POST /api/exams/:exam_id/results/upload - Upload and process exam results
-// ✅ POST /api/exams/:exam_id/results/upload - Upload and process exam results
 export const uploadExamResults = async (req, res) => {
   const {
     school_id,
@@ -883,8 +882,14 @@ export const uploadExamResults = async (req, res) => {
     if (gradeRankError) {
       console.warn('⚠️ Grade rank recalculation failed:', gradeRankError);
     }
+    
+    // ✅ STEP 5: Recalculate All India Rank
+    const { error: allIndiaRankError } = await supabase.rpc('calculate_all_india_rank');
+    if (allIndiaRankError) {
+    console.warn('⚠️ All India rank recalculation failed:', allIndiaRankError);
+    }
 
-    // ✅ STEP 4: Fetch results (now with real ranks and averages if recalc succeeded)
+    // ✅ STEP 6: Fetch results (now with real ranks and averages if recalc succeeded)
     const { data: results, error: fetchError } = await supabase
       .from('exams')
       .select(`
@@ -1125,7 +1130,12 @@ export const getStudentExamResults = async (req, res) => {
         max_marks_physics,
         max_marks_chemistry,
         max_marks_maths,
-        max_marks_biology
+        max_marks_biology,
+        school_id,
+        first_name,
+        last_name,
+        class,
+        section
       `)
       .eq('student_id', student_id)
       .order('created_at', { ascending: false });
@@ -1155,7 +1165,12 @@ export const getStudentExamResults = async (req, res) => {
   percentage: parseFloat(r.percentage) || 0,
   class_rank: r.class_rank || '-',
   school_rank: r.school_rank || '-',
-  all_schools_rank: r.all_schools_rank || '-'
+  all_schools_rank: r.all_schools_rank || '-',
+  school_id: r.school_id || '-',
+  first_name: r.first_name || '-',
+  last_name: r.last_name || '-',
+  class: r.class || '-',
+  section: r.section || '-'
 }));
 
     return res.json(formatted);
