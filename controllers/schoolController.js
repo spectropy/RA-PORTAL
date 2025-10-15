@@ -126,7 +126,7 @@ export const getSchoolById = async (req, res) => {
  
     const { data: classes, error: classesError } = await supabase
       .from('classes')
-      .select('school_id, class, foundation, program, "group", section, num_students')
+      .select('id,school_id, class, foundation, program, "group", section, num_students')
       .eq('school_id', school_id)
       .order('class', { ascending: true })
       .order('section', { ascending: true });
@@ -149,7 +149,7 @@ export const getSchoolById = async (req, res) => {
       const teacherRowIds = rawTeachers.map(t => t.id);
       const { data: assignments, error: assignmentsError } = await supabase
         .from('teacher_assignments')
-        .select('teacher_id, class, section, subject')
+        .select('id,teacher_id, class, section, subject')
         .in('teacher_id', teacherRowIds);
  
       if (!assignmentsError && assignments) {
