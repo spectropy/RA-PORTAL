@@ -155,6 +155,7 @@ export const getSchoolById = async (req, res) => {
       if (!assignmentsError && assignments) {
         for (const a of assignments) {
           (assignmentsMap[a.teacher_id] ||= []).push({
+            id: a.id, 
             class: a.class,
             section: a.section,
             subject: a.subject
