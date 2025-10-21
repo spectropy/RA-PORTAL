@@ -98,6 +98,7 @@ app.post('/api/exams', schoolController.createExam);
 app.post('/api/exams/:exam_id/results/upload', upload.single('file'), schoolController.uploadExamResults);
 app.get('/api/exams/results', schoolController.getStudentExamResults);
 app.put('/api/schools/:school_id/logo', schoolController.updateSchoolLogo);
+app.get('/api/queries/dashboard', schoolController.getDashboardData); 
 // Reference data routes
 app.get('/api/foundations', schoolController.getFoundations);
 app.get('/api/programs', schoolController.getPrograms);

@@ -1136,7 +1136,10 @@ export const getStudentExamResults = async (req, res) => {
         first_name,
         last_name,
         class,
-        section
+        section,
+        correct_answers,
+        wrong_answers,
+        unattempted
       `)
       .eq('student_id', student_id)
       .order('created_at', { ascending: false });
@@ -1171,7 +1174,10 @@ export const getStudentExamResults = async (req, res) => {
   first_name: r.first_name || '-',
   last_name: r.last_name || '-',
   class: r.class || '-',
-  section: r.section || '-'
+  section: r.section || '-',
+  correct_answers: r.correct_answers,
+  wrong_answers: r.wrong_answers,
+  unattempted: r.unattempted
 }));
 
     return res.json(formatted);
@@ -1383,6 +1389,146 @@ export const updateSchoolLogo = async (req, res) => {
     return res.json({ success: true, data });
   } catch (err) {
     console.error('Update school logo error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// ✅ GET /api/queries/dashboard?program=...&exam_pattern=...&school=...
+export const getDashboardData = async (req, res) => {
+  const { program, exam_pattern, school } = req.query;
+
+  if (!program) {
+    return res.status(400).json({ error: 'program is required' });
+  }
+
+  // Normalize exam_pattern (trim to handle whitespace inconsistencies)
+  const exam_pattern_trimmed = exam_pattern ? exam_pattern.trim() : null;
+  const ROW_LIMIT = 10000;
+
+  try {
+    const queries = [];
+
+    // Fetch exam patterns
+    queries.push(
+      supabase
+        .from('exams')
+        .select('exam_pattern')
+        .eq('program', program)
+        .limit(ROW_LIMIT)
+    );
+
+    // Fetch schools
+    let schoolQuery = supabase
+      .from('exams')
+      .select('school_id')
+      .eq('program', program)
+      .limit(ROW_LIMIT);
+    if (exam_pattern_trimmed) {
+      schoolQuery = schoolQuery.eq('exam_pattern', exam_pattern_trimmed);
+    }
+    queries.push(schoolQuery);
+
+    // 🔁 Fetch stats WITH student_id
+    let statsQuery = supabase
+      .from('exams')
+      .select('school_id, class, section, exam_pattern, student_id') // ← include student_id
+      .eq('program', program)
+      .limit(ROW_LIMIT);
+    if (exam_pattern_trimmed) {
+      statsQuery = statsQuery.eq('exam_pattern', exam_pattern_trimmed);
+    }
+    if (school) {
+      statsQuery = statsQuery.eq('school_id', school);
+    }
+    queries.push(statsQuery);
+
+    const [examPatternRes, schoolRes, statsRes] = await Promise.all(queries);
+
+    console.log("🔍 Raw statsRes.data (first 3 rows):", statsRes.data.slice(0, 3));
+    console.log("🔍 Does data have student_id?", statsRes.data.some(row => row.student_id !== undefined));
+
+    if (examPatternRes.error || schoolRes.error || statsRes.error) {
+      console.error('Dashboard query error:', { examPatternRes, schoolRes, statsRes });
+      return res.status(500).json({ error: 'Database query failed' });
+    }
+
+    // Process exam patterns
+    const examPatterns = [
+      ...new Set(
+        examPatternRes.data
+          .map(r => r.exam_pattern)
+          .filter(p => p && p.trim() !== '')
+          .map(p => p.trim())
+      )
+    ].sort();
+
+    // Process schools
+    const schools = [
+      ...new Set(
+        schoolRes.data
+          .map(r => r.school_id)
+          .filter(id => id && id.trim() !== '')
+      )
+    ].sort();
+
+    // Process stats
+    let stats;
+    const data = statsRes.data;
+
+    if (exam_pattern_trimmed) {
+      // 🔹 SINGLE PATTERN: count distinct students
+      const schoolIds = new Set();
+      const classKeys = new Set();
+      const studentIds = new Set(); // ← track students
+
+      for (const row of data) {
+        if (row.school_id) schoolIds.add(row.school_id);
+        if (row.class && row.section) classKeys.add(`${row.class}-${row.section}`);
+        if (row.student_id) studentIds.add(row.student_id); // ← add
+      }
+
+      stats = {
+        examPattern: exam_pattern_trimmed,
+        schoolCount: schoolIds.size,
+        classCount: classKeys.size,
+        studentCount: studentIds.size, // ✅ consistent logic
+      };
+      console.log("📊 Single pattern stats:", stats); // 🔴 LOG HERE
+    } else {
+      // 🔹 ALL PATTERNS: group by pattern, count distinct students per pattern
+      const patternMap = {};
+
+      for (const row of data) {
+        const pattern = (row.exam_pattern || '— Uncategorized —').trim();
+        if (!patternMap[pattern]) {
+          patternMap[pattern] = {
+            schoolIds: new Set(),
+            classKeys: new Set(),
+            studentIds: new Set(), // ← same structure
+          };
+        }
+        if (row.school_id) patternMap[pattern].schoolIds.add(row.school_id);
+        if (row.class && row.section) patternMap[pattern].classKeys.add(`${row.class}-${row.section}`);
+        if (row.student_id) patternMap[pattern].studentIds.add(row.student_id); // ← same logic
+      }
+
+      stats = Object.entries(patternMap).map(([pattern, sets]) => ({
+        examPattern: pattern,
+        schoolCount: sets.schoolIds.size,
+        classCount: sets.classKeys.size,
+        studentCount: sets.studentIds.size, // ✅ same logic as single pattern
+      })).sort((a, b) => a.examPattern.localeCompare(b.examPattern));
+      console.log("📊 All patterns stats:", stats); // 🔴 LOG HERE
+      console.log("Total rows in 'All Patterns' query:", statsRes.data.length);
+    }
+
+    return res.json({
+      examPatterns,
+      schools,
+      stats,
+    });
+  } catch (err) {
+    console.error('getDashboardData error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
