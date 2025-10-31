@@ -605,8 +605,7 @@ export const getFoundations = (req, res) => {
   const FOUNDATIONS = [
     { id: 'IIT-MED', name: 'IIT-MED' },
     { id: 'IIT', name: 'IIT' },
-    { id: 'MED', name: 'MED' },
-    { id: 'FF', name: 'FF' }
+    { id: 'MED', name: 'MED' }
   ];
   res.json(FOUNDATIONS);
 };
@@ -615,8 +614,10 @@ export const getFoundations = (req, res) => {
 export const getPrograms = (req, res) => {
   const PROGRAMS = [
     { id: 'CAT', name: 'CAT' },
+    { id: 'FF', name: 'FF'},
     { id: 'MAE', name: 'MAE' },
-    { id: 'PIO', name: 'PIO' }
+    { id: 'PIO', name: 'PIO' },
+    { id: 'NGHS_MAESTRO', name: 'NGHS_MAESTRO'}
   ];
   res.json(PROGRAMS);
 };
