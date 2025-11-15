@@ -450,14 +450,16 @@ export const uploadStudents = async (req, res) => {
     const studentName = (record['NAME'] || record['name'] || record['First Name'] || '').trim();
     
     // 🆕 Get ROLLNO → convert to INTEGER for `roll_no`
-    const rollNoRaw = record['ROLLNO'] || record['Roll No'] || record['Student ID'] || record['student_id'];
-    const rollNo = parseInt(rollNoRaw, 10);
+    const rollNoRaw = (record['ROLLNO'] || record['Roll No'] || record['Student ID'] || record['student_id'] || '').toString().trim();
+    
     
     // ❗ If roll_no is not a valid number, skip this record
-    if (isNaN(rollNo) || rollNo <= 0) {
-      console.warn(`⚠️ Skipping record ${index + 1}: Invalid roll_no (${rollNoRaw})`);
+    if (!rollNoRaw) {
+      console.warn(`⚠️ Skipping record ${index + 1}: Missing or empty ROLLNO`);
       return null; // Will be filtered out
     }
+    
+    const rollNo = rollNoRaw;
 
     // 🆕 Get phone/email with fallbacks
     const parentPhone = record['PHONENO'] || record['Phone'] || record['Parent Phone'] || record['parent_phone'] || null;
@@ -477,9 +479,9 @@ export const uploadStudents = async (req, res) => {
   })
   .filter(Boolean) // Remove nulls from invalid roll_no
   .filter(student => {
-    const valid = student.name && student.roll_no > 0;
-    if (!valid) console.warn('⚠️ Skipping invalid student:', student);
-    return valid;
+  const valid = student.name && student.roll_no && typeof student.roll_no === 'string' && student.roll_no.trim() !== '';
+  if (!valid) console.warn('⚠️ Skipping invalid student:', student);
+  return valid;
   });
     console.log('✅ Valid students:', studentsData.length);
     if (studentsData.length === 0) {
