@@ -619,7 +619,7 @@ export const getPrograms = (req, res) => {
     { id: 'FF', name: 'FF'},
     { id: 'MAE', name: 'MAE' },
     { id: 'PIO', name: 'PIO' },
-    { id: 'NGHS_MAESTRO', name: 'NGHS_MAESTRO'}
+    { id: 'NGHS_MAE', name: 'NGHS_MAE'}
   ];
   res.json(PROGRAMS);
 };
