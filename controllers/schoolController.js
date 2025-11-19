@@ -821,7 +821,7 @@ export const uploadExamResults = async (req, res) => {
         student_id: studentId,
         first_name: firstName,
         last_name: lastName,
-        total_questions: totalQuestions,
+        total_questions: total_max_marks,
         correct_answers: correct,
         wrong_answers: wrong,
         unattempted: unattempted,
