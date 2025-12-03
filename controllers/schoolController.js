@@ -54,7 +54,7 @@ export const getSchools = async (req, res) => {
 export const createSchool = async (req, res) => {
   const {
     school_name, state, academic_year, area, district,
-    school_number_2d, classes = [], teachers = []
+    school_number_2d, logo_url, classes = [], teachers = []
   } = req.body || {};
  
   if (!school_name || !state || !academic_year || !school_number_2d) {
@@ -80,6 +80,7 @@ export const createSchool = async (req, res) => {
     area: area || null,
     district: district || null,
     school_number_2d: parseInt(school_number_2d, 10),
+    logo_url: logo_url || null,
     classes,
     teachers
   };
