@@ -39,16 +39,23 @@ const upload = multer({
 
 const app = express();
 
-const FRONTEND_URLS = process.env.FRONTEND_URLS.split(',');
+const FRONTEND_URLS = [
+  "http://localhost:5173",
+  "https://ra-portal-frontend.vercel.app",
+  "https://result.spectropy.com"
+];
 
 app.use(
   cors({
     origin: function (origin, callback) {
+      // Allow tools like Postman, mobile apps (no origin)
       if (!origin) return callback(null, true);
 
       if (FRONTEND_URLS.includes(origin)) {
+        console.log("✅ CORS Allowed:", origin);
         return callback(null, true);
       }
+
       console.log("❌ CORS Blocked:", origin);
       return callback(new Error("Not allowed by CORS"));
     },
