@@ -39,22 +39,9 @@ const upload = multer({
 
 const app = express();
 
-const FRONTEND_URLS = process.env.FRONTEND_URLS.split(',');
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://ra-portal-frontend.vercel.app'||'http://localhost:5173';
 
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin) return callback(null, true);
-
-      if (FRONTEND_URLS.includes(origin)) {
-        return callback(null, true);
-      }
-      console.log("❌ CORS Blocked:", origin);
-      return callback(new Error("Not allowed by CORS"));
-    },
-    credentials: true,
-  })
-);
+app.use(cors({ origin: FRONTEND_URL, credentials: true }));
 
 app.use(express.json({ limit: '5mb' }));
 
