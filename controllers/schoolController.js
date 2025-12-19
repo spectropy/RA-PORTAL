@@ -864,32 +864,57 @@ export const uploadExamResults = async (req, res) => {
     }
 
     // ✅ STEP 1: Recalculate ranks (safe: not in a trigger)
-    const { error: rankError } = await supabase.rpc('calculate_ranks');
+    const { error: rankError } = await supabase.rpc('calculate_exam_ranks', {
+  p_school_id: school_id,
+  p_program: program,
+  p_exam_pattern: exam_pattern,
+  p_class: examClass,
+  p_section: examSection,
+  p_exam_date: exam_date || null
+});
     if (rankError) {
       console.warn('⚠️ Rank recalculation failed:', rankError);
       // Don't fail the whole request — proceed with '-' ranks if needed
     }
 
     // ✅ STEP 2: Recalculate exam-level averages
-    const { error: examAvgError } = await supabase.rpc('calculate_exam_averages');
+    const { error: examAvgError } = await supabase.rpc('calculate_exam_averages_for', {
+  p_school_id: school_id,
+  p_program: program,
+  p_exam_pattern: exam_pattern,
+  p_class: examClass,
+  p_section: examSection,
+  p_exam_date: exam_date || null
+});
     if (examAvgError) {
       console.warn('⚠️ Exam averages recalculation failed:', examAvgError);
     }
 
     // ✅ STEP 3: Recalculate grade-level averages
-    const { error: gradeAvgError } = await supabase.rpc('calculate_grade_averages');
+    const { error: gradeAvgError } = await supabase.rpc('calculate_grade_averages_for', {
+  p_school_id: school_id,
+  p_program: program,
+  p_class: examClass,
+  p_section: examSection
+});
     if (gradeAvgError) {
       console.warn('⚠️ Grade averages recalculation failed:', gradeAvgError);
     }
 
     // ✅ STEP 4: Recalculate grade ranks
-    const { error: gradeRankError } = await supabase.rpc('calculate_grade_ranks');
+    const { error: gradeRankError } = await supabase.rpc('calculate_grade_ranks_for', {
+  p_program: program,
+  p_exam_pattern: exam_pattern,
+  p_class: examClass
+});
     if (gradeRankError) {
       console.warn('⚠️ Grade rank recalculation failed:', gradeRankError);
     }
     
     // ✅ STEP 5: Recalculate All India Rank
-    const { error: allIndiaRankError } = await supabase.rpc('calculate_all_india_rank');
+    const { error: allIndiaRankError } = await supabase.rpc('calculate_all_india_rank_for', {
+  p_class: examClass
+});
     if (allIndiaRankError) {
     console.warn('⚠️ All India rank recalculation failed:', allIndiaRankError);
     }
