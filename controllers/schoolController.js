@@ -574,24 +574,24 @@ export const getExams = async (req, res) => {
   try {
     console.log('🔍 getExams query params:', req.query); // 👈 ADD THIS
 
-    let query = supabase.from('exams').select('*');
-    
-    if (req.query.school_id) {
-      query = query.eq('school_id', req.query.school_id);
-    }
-    if (req.query.exam_pattern) {
-      query = query.eq('exam_pattern', req.query.exam_pattern);
-    }
-    if (req.query.class) {
-      query = query.eq('class', req.query.class);
-    }
-    if (req.query.section) {
-      query = query.eq('section', req.query.section);
-    }
-    query = query.order('created_at', { ascending: false });
+    const data = await fetchAllExams((query) => {
+      let nextQuery = query;
 
-    const { data, error } = await query;
-    if (error) return res.status(500).json({ error: 'Database query failed: ' + error.message });
+      if (req.query.school_id) {
+        nextQuery = nextQuery.eq('school_id', req.query.school_id);
+      }
+      if (req.query.exam_pattern) {
+        nextQuery = nextQuery.eq('exam_pattern', req.query.exam_pattern);
+      }
+      if (req.query.class) {
+        nextQuery = nextQuery.eq('class', req.query.class);
+      }
+      if (req.query.section) {
+        nextQuery = nextQuery.eq('section', req.query.section);
+      }
+
+      return nextQuery.order('created_at', { ascending: false });
+    });
 
     console.log('✅ getExams found:', data.length, 'records'); // 👈 ADD THIS
     console.log('📋 First record:', data[0]); // 👈 ADD THIS
@@ -997,6 +997,363 @@ export const getStudentsByClassSection = async (req, res) => {
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
+
+const normalizeTeacherSubject = (subject) => {
+  if (!subject) return null;
+  const normalized = String(subject).trim().toLowerCase();
+
+  if (normalized === 'physics') return 'Physics';
+  if (normalized === 'chemistry') return 'Chemistry';
+  if (normalized === 'biology') return 'Biology';
+  if (normalized === 'maths' || normalized === 'math' || normalized === 'mathematics') return 'Maths';
+
+  return null;
+};
+
+const normalizeTeacherClassSection = (classValue, sectionValue) =>
+  `${String(classValue || 'N/A').trim()}-${String(sectionValue || 'N/A').trim()}`;
+
+const normalizeExamDate = (examDate) => {
+  if (!examDate) return 'NO_DATE';
+  return String(examDate).trim();
+};
+
+const buildTeacherExamIdentity = ({ school_id, program, exam_pattern, exam_date, class_section }) =>
+  [
+    String(school_id || 'N/A').trim(),
+    String(program || 'N/A').trim(),
+    String(exam_pattern || 'N/A').trim(),
+    normalizeExamDate(exam_date),
+    String(class_section || 'N/A').trim()
+  ].join('|');
+
+const buildTeacherAverageLookup = (exams) => {
+  const groupedExamScores = new Map();
+
+  exams.forEach((exam) => {
+    const schoolId = exam.school_id || 'N/A';
+    const program = exam.program || 'N/A';
+    const examPattern = exam.exam_pattern || 'N/A';
+    const examDate = normalizeExamDate(exam.exam_date);
+    const classSection = normalizeTeacherClassSection(exam.class, exam.section);
+    const key = buildTeacherExamIdentity({
+      school_id: schoolId,
+      program,
+      exam_pattern: examPattern,
+      exam_date: examDate,
+      class_section: classSection
+    });
+
+    if (!groupedExamScores.has(key)) {
+      groupedExamScores.set(key, {
+        school_id: schoolId,
+        program,
+        exam_pattern: examPattern,
+        exam_date: examDate,
+        class_section: classSection,
+        Physics: [],
+        Chemistry: [],
+        Biology: [],
+        Maths: []
+      });
+    }
+
+    const bucket = groupedExamScores.get(key);
+    if (exam.physics_percentage != null && exam.physics_percentage !== '') {
+      bucket.Physics.push(parseFloat(exam.physics_percentage));
+    }
+    if (exam.chemistry_percentage != null && exam.chemistry_percentage !== '') {
+      bucket.Chemistry.push(parseFloat(exam.chemistry_percentage));
+    }
+    if (exam.biology_percentage != null && exam.biology_percentage !== '') {
+      bucket.Biology.push(parseFloat(exam.biology_percentage));
+    }
+    if (exam.maths_percentage != null && exam.maths_percentage !== '') {
+      bucket.Maths.push(parseFloat(exam.maths_percentage));
+    }
+  });
+
+  const averagesByKey = new Map();
+  groupedExamScores.forEach((bucket, key) => {
+    averagesByKey.set(key, {
+      school_id: bucket.school_id,
+      program: bucket.program,
+      exam_pattern: bucket.exam_pattern,
+      exam_date: bucket.exam_date,
+      class_section: bucket.class_section,
+      Physics: bucket.Physics.length ? parseFloat((bucket.Physics.reduce((a, b) => a + b, 0) / bucket.Physics.length).toFixed(1)) : null,
+      Chemistry: bucket.Chemistry.length ? parseFloat((bucket.Chemistry.reduce((a, b) => a + b, 0) / bucket.Chemistry.length).toFixed(1)) : null,
+      Biology: bucket.Biology.length ? parseFloat((bucket.Biology.reduce((a, b) => a + b, 0) / bucket.Biology.length).toFixed(1)) : null,
+      Maths: bucket.Maths.length ? parseFloat((bucket.Maths.reduce((a, b) => a + b, 0) / bucket.Maths.length).toFixed(1)) : null,
+    });
+  });
+
+  return averagesByKey;
+};
+
+const fetchAllExams = async (applyFilters = (query) => query) => {
+  const pageSize = 1000;
+  let from = 0;
+  const allRows = [];
+
+  while (true) {
+    let query = supabase.from('exams').select('*').range(from, from + pageSize - 1);
+    query = applyFilters(query);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const rows = Array.isArray(data) ? data : [];
+    allRows.push(...rows);
+
+    if (rows.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return allRows;
+};
+
+const calculateRankForAverage = (rows, average) => {
+  if (!Array.isArray(rows) || rows.length === 0) return 1;
+  const higherScores = rows.filter((row) => row.average > average).length;
+  return higherScores + 1;
+};
+
+// ✅ GET /api/teachers/:teacher_id/ranks — Teacher performance averages with ranks
+export const getTeacherRanks = async (req, res) => {
+  const teacherId = (req.params.teacher_id || req.body?.teacher_id || '').trim().toUpperCase();
+  const providedAssignments = Array.isArray(req.body?.assignments) ? req.body.assignments : null;
+  const requestedSchoolId = req.body?.school_id?.trim?.() || null;
+
+  if (!teacherId) {
+    return res.status(400).json({ error: 'teacher_id is required' });
+  }
+
+  try {
+    const { data: targetTeacher, error: targetTeacherError } = await supabase
+      .from('teachers')
+      .select('id, teacher_id, name, school_id')
+      .eq('teacher_id', teacherId)
+      .single();
+
+    if (targetTeacherError || !targetTeacher) {
+      return res.status(404).json({ error: 'Teacher not found' });
+    }
+
+    const { data: teachers, error: teachersError } = await supabase
+      .from('teachers')
+      .select('id, teacher_id, name, school_id');
+
+    if (teachersError) {
+      return res.status(500).json({ error: 'Failed to fetch teachers' });
+    }
+
+    const teacherRowIds = (teachers || []).map((teacher) => teacher.id);
+    const { data: assignments, error: assignmentsError } = await supabase
+      .from('teacher_assignments')
+      .select('teacher_id, class, section, subject')
+      .in('teacher_id', teacherRowIds);
+
+    if (assignmentsError) {
+      return res.status(500).json({ error: 'Failed to fetch teacher assignments' });
+    }
+
+    let targetAssignments = providedAssignments;
+    if (!targetAssignments) {
+      const { data, error: targetAssignmentsError } = await supabase
+        .from('teacher_assignments')
+        .select('class, section, subject')
+        .eq('teacher_id', targetTeacher.id);
+
+      if (targetAssignmentsError) {
+        return res.status(500).json({ error: 'Failed to fetch target teacher assignments' });
+      }
+
+      targetAssignments = data;
+    }
+
+    const exams = await fetchAllExams((query) =>
+      query.select(`
+        school_id,
+        program,
+        exam_pattern,
+        exam_date,
+        class,
+        section,
+        physics_percentage,
+        chemistry_percentage,
+        biology_percentage,
+        maths_percentage
+      `)
+    );
+
+    const effectiveSchoolId = requestedSchoolId || targetTeacher.school_id;
+    const averageLookup = buildTeacherAverageLookup(exams || []);
+    const assignmentsByTeacher = new Map();
+    (assignments || []).forEach((assignment) => {
+      const subject = normalizeTeacherSubject(assignment.subject);
+      if (!subject) return;
+
+      const teacherAssignments = assignmentsByTeacher.get(assignment.teacher_id) || [];
+      teacherAssignments.push({
+        class_section: normalizeTeacherClassSection(assignment.class, assignment.section),
+        subject
+      });
+      assignmentsByTeacher.set(assignment.teacher_id, teacherAssignments);
+    });
+
+    const normalizedAssignments = Array.from(
+      new Map(
+        (targetAssignments || [])
+          .map((assignment) => ({
+            class_section: normalizeTeacherClassSection(assignment.class, assignment.section),
+            subject: normalizeTeacherSubject(assignment.subject)
+          }))
+          .filter((assignment) => assignment.subject)
+          .map((assignment) => [`${assignment.class_section}|${assignment.subject}`, assignment])
+      ).values()
+    );
+    assignmentsByTeacher.set(targetTeacher.id, normalizedAssignments);
+
+    const targetAverageContexts = Array.from(averageLookup.values())
+      .filter((bucket) => bucket.school_id === effectiveSchoolId)
+      .filter((bucket) =>
+        normalizedAssignments.some(
+          (assignment) =>
+            assignment.class_section === bucket.class_section &&
+            bucket[assignment.subject] != null &&
+            !Number.isNaN(bucket[assignment.subject])
+        )
+      );
+
+    const finalTeacherRankRows = [];
+    targetAverageContexts.forEach((examContext) => {
+      normalizedAssignments.forEach((assignment) => {
+        if (assignment.class_section !== examContext.class_section) return;
+
+        const average = examContext?.[assignment.subject];
+        if (average == null || Number.isNaN(average)) return;
+
+        const comparisonRows = [];
+        (teachers || []).forEach((teacher) => {
+          const teacherAssignments = assignmentsByTeacher.get(teacher.id) || [];
+          const teachesSameColumn = teacherAssignments.some(
+            (teacherAssignment) =>
+              teacherAssignment.class_section === assignment.class_section &&
+              teacherAssignment.subject === assignment.subject
+          );
+          if (!teachesSameColumn) return;
+
+          const comparisonBucket = averageLookup.get(
+            buildTeacherExamIdentity({
+              school_id: teacher.school_id,
+              program: examContext.program,
+              exam_pattern: examContext.exam_pattern,
+              exam_date: examContext.exam_date,
+              class_section: assignment.class_section
+            })
+          );
+          const comparisonAverage = comparisonBucket?.[assignment.subject];
+          if (comparisonAverage == null || Number.isNaN(comparisonAverage)) return;
+
+          comparisonRows.push({
+            teacher_row_id: teacher.id,
+            teacher_id: teacher.teacher_id,
+            teacher_name: teacher.name,
+            school_id: teacher.school_id,
+            program: examContext.program,
+            exam_pattern: examContext.exam_pattern,
+            exam_date: examContext.exam_date,
+            class_section: assignment.class_section,
+            subject: assignment.subject,
+            average: comparisonAverage
+          });
+        });
+
+        finalTeacherRankRows.push({
+          teacher_row_id: targetTeacher.id,
+          teacher_id: targetTeacher.teacher_id,
+          teacher_name: targetTeacher.name,
+          school_id: effectiveSchoolId,
+          program: examContext.program,
+          exam_pattern: examContext.exam_pattern,
+          exam_date: examContext.exam_date,
+          class_section: assignment.class_section,
+          subject: assignment.subject,
+          average,
+          school_rank: calculateRankForAverage(
+            comparisonRows.filter((row) => row.school_id === effectiveSchoolId),
+            average
+          ),
+          all_india_rank: calculateRankForAverage(comparisonRows, average)
+        });
+      });
+    });
+
+    const uniqueFinalTeacherRankRows = Array.from(
+      new Map(
+        finalTeacherRankRows.map((row) => [
+          `${row.program}|${row.exam_pattern}|${row.exam_date}|${row.class_section}|${row.subject}`,
+          row
+        ])
+      ).values()
+    ).sort((a, b) => {
+      const programCompare = a.program.localeCompare(b.program);
+      if (programCompare !== 0) return programCompare;
+      const patternCompare = a.exam_pattern.localeCompare(b.exam_pattern);
+      if (patternCompare !== 0) return patternCompare;
+      const dateCompare = a.exam_date.localeCompare(b.exam_date);
+      if (dateCompare !== 0) return dateCompare;
+      const classCompare = a.class_section.localeCompare(b.class_section);
+      if (classCompare !== 0) return classCompare;
+      return a.subject.localeCompare(b.subject);
+    });
+
+    const finalRankKeys = new Set(
+      uniqueFinalTeacherRankRows.map((row) => `${row.program}|${row.exam_pattern}|${row.exam_date}|${row.class_section}|${row.subject}`)
+    );
+    const expectedKeys = [];
+
+    targetAverageContexts.forEach((examContext) => {
+      normalizedAssignments.forEach((assignment) => {
+        if (assignment.class_section !== examContext.class_section) return;
+
+        const average = examContext?.[assignment.subject];
+        if (average == null || Number.isNaN(average)) return;
+
+        expectedKeys.push(
+          `${examContext.program}|${examContext.exam_pattern}|${examContext.exam_date}|${assignment.class_section}|${assignment.subject}`
+        );
+      });
+    });
+
+    const missingFinalKeys = expectedKeys.filter((key) => !finalRankKeys.has(key));
+
+    console.log('Teacher rank rows generated:', {
+      teacherId,
+      effectiveSchoolId,
+      totalTeachers: (teachers || []).length,
+      teacherRows: uniqueFinalTeacherRankRows.length,
+      targetAssignments: normalizedAssignments.length,
+      candidateContexts: targetAverageContexts.length,
+      missingFinalKeys,
+      sample: uniqueFinalTeacherRankRows.slice(0, 10)
+    });
+
+    return res.json({
+      success: true,
+      teacher: {
+        teacher_id: targetTeacher.teacher_id,
+        name: targetTeacher.name,
+        school_id: effectiveSchoolId
+      },
+      rows: uniqueFinalTeacherRankRows
+    });
+  } catch (err) {
+    console.error('Teacher rank fetch error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
 // ✅ POST /api/teachers/login - Direct teacher login by teacher_id
 export const loginTeacherByTeacherId = async (req, res) => {
   const { teacher_id, password } = req.body;
@@ -1041,15 +1398,15 @@ export const loginTeacherByTeacherId = async (req, res) => {
 
     const teacherAssignments = Array.isArray(assignments) ? assignments : [];
 
-    // ✅ Also fetch school name for display
+    // ✅ Also fetch school details for display/report header
     const { data: school, error: schoolError } = await supabase
       .from('schools')
-      .select('school_name')
+      .select('school_name, logo_url')
       .eq('school_id', teacher.school_id)
       .single();
 
     if (schoolError) {
-      console.warn('Failed to load school name:', schoolError);
+      console.warn('Failed to load school details:', schoolError);
     }
 
     // 🚀 SUCCESS: Return full teacher + school data
@@ -1058,7 +1415,8 @@ export const loginTeacherByTeacherId = async (req, res) => {
       teacher: {
         ...teacher,
         teacher_assignments: teacherAssignments,
-        school_name: school?.school_name || "Unknown School"
+        school_name: school?.school_name || "Unknown School",
+        school_logo_url: school?.logo_url || null
       }
     });
 
