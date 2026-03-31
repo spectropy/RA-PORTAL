@@ -1283,10 +1283,6 @@ export const getTeacherRanks = async (req, res) => {
           class_section: assignment.class_section,
           subject: assignment.subject,
           average,
-          school_rank: calculateRankForAverage(
-            comparisonRows.filter((row) => row.school_id === effectiveSchoolId),
-            average
-          ),
           all_india_rank: calculateRankForAverage(comparisonRows, average)
         });
       });
