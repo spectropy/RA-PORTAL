@@ -1237,12 +1237,10 @@ export const getTeacherRanks = async (req, res) => {
         const comparisonRows = [];
         (teachers || []).forEach((teacher) => {
           const teacherAssignments = assignmentsByTeacher.get(teacher.id) || [];
-          const teachesSameColumn = teacherAssignments.some(
-            (teacherAssignment) =>
-              teacherAssignment.class_section === assignment.class_section &&
-              teacherAssignment.subject === assignment.subject
+          const sameClassAssignments = teacherAssignments.filter(
+            (teacherAssignment) => teacherAssignment.class_section === assignment.class_section
           );
-          if (!teachesSameColumn) return;
+          if (sameClassAssignments.length === 0) return;
 
           const comparisonBucket = averageLookup.get(
             buildTeacherExamIdentity({
@@ -1253,20 +1251,24 @@ export const getTeacherRanks = async (req, res) => {
               class_section: assignment.class_section
             })
           );
-          const comparisonAverage = comparisonBucket?.[assignment.subject];
-          if (comparisonAverage == null || Number.isNaN(comparisonAverage)) return;
+          if (!comparisonBucket) return;
 
-          comparisonRows.push({
-            teacher_row_id: teacher.id,
-            teacher_id: teacher.teacher_id,
-            teacher_name: teacher.name,
-            school_id: teacher.school_id,
-            program: examContext.program,
-            exam_pattern: examContext.exam_pattern,
-            exam_date: examContext.exam_date,
-            class_section: assignment.class_section,
-            subject: assignment.subject,
-            average: comparisonAverage
+          sameClassAssignments.forEach((teacherAssignment) => {
+            const comparisonAverage = comparisonBucket?.[teacherAssignment.subject];
+            if (comparisonAverage == null || Number.isNaN(comparisonAverage)) return;
+
+            comparisonRows.push({
+              teacher_row_id: teacher.id,
+              teacher_id: teacher.teacher_id,
+              teacher_name: teacher.name,
+              school_id: teacher.school_id,
+              program: examContext.program,
+              exam_pattern: examContext.exam_pattern,
+              exam_date: examContext.exam_date,
+              class_section: assignment.class_section,
+              subject: teacherAssignment.subject,
+              average: comparisonAverage
+            });
           });
         });
 
