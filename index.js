@@ -39,13 +39,26 @@ const upload = multer({
 
 const app = express();
 
+// Parse JSON and URL-encoded request bodies before requests reach the routes.
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
 const FRONTEND_URLS = [
   "http://localhost:5173",
   "https://ra-portal-frontend.vercel.app",
-  "https://result.spectropy.com"
+  "https://result.spectropy.com",
+  "https://192.168.0.127:5173",
+  "*"
 ];
 
 app.use(
+  cors({
+    origin: true, // Allow every origin
+    credentials: true,
+  })
+);
+
+/*app.use(
   cors({
     origin: function (origin, callback) {
       // Allow tools like Postman, mobile apps (no origin)
@@ -62,8 +75,7 @@ app.use(
     credentials: true,
   })
 );
-
-app.use(express.json({ limit: '5mb' }));
+*/
 
 // =========================
 // 🛠️ Routes

@@ -474,6 +474,8 @@ export const uploadStudents = async (req, res) => {
       class: classValue,
       section: sectionValue,
       gender: record['Gender'] || record['gender'] || null,
+      parent_phone: parentPhone,
+      parent_email: parentEmail,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
@@ -901,7 +903,17 @@ export const uploadExamResults = async (req, res) => {
       console.warn('⚠️ Grade averages recalculation failed:', gradeAvgError);
     }
 
-    // ✅ STEP 4: Recalculate grade ranks
+    // ✅ STEP 4: Recalculate cumulative percentages for the class-section
+    const { error: cumulativeError } = await supabase.rpc('calculate_cumulative_percentages_for', {
+      p_school_id: school_id,
+      p_class: examClass,
+      p_section: examSection
+    });
+    if (cumulativeError) {
+      console.warn('⚠️ Cumulative percentage recalculation failed:', cumulativeError);
+    }
+
+    // ✅ STEP 5: Recalculate grade ranks
     const { error: gradeRankError } = await supabase.rpc('calculate_grade_ranks_for', {
   p_program: program,
   p_exam_pattern: exam_pattern,
@@ -911,7 +923,7 @@ export const uploadExamResults = async (req, res) => {
       console.warn('⚠️ Grade rank recalculation failed:', gradeRankError);
     }
     
-    // ✅ STEP 5: Recalculate All India Rank
+    // ✅ STEP 6: Recalculate All India Rank
     const { error: allIndiaRankError } = await supabase.rpc('calculate_all_india_rank_for', {
   p_class: examClass
 });
@@ -919,7 +931,7 @@ export const uploadExamResults = async (req, res) => {
     console.warn('⚠️ All India rank recalculation failed:', allIndiaRankError);
     }
 
-    // ✅ STEP 6: Fetch results (now with real ranks and averages if recalc succeeded)
+    // ✅ STEP 7: Fetch results (now with real ranks and averages if recalc succeeded)
     const { data: results, error: fetchError } = await supabase
       .from('exams')
       .select(`
@@ -999,7 +1011,7 @@ export const getStudentsByClassSection = async (req, res) => {
 };
 // ✅ POST /api/teachers/login - Direct teacher login by teacher_id
 export const loginTeacherByTeacherId = async (req, res) => {
-  const { teacher_id, password } = req.body;
+  const { teacher_id, password } = req.body ?? {};
 
   if (!teacher_id || !password) {
     return res.status(400).json({ error: "Teacher ID and password are required" });
