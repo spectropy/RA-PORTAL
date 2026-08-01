@@ -606,6 +606,180 @@ export const getExams = async (req, res) => {
 };
 
 // ✅ GET /api/foundations - MUST MATCH FRONTEND
+const getExamDatasetContext = (req) => ({
+  school_id: req.params.school_id,
+  program: req.query.program,
+  exam_pattern: req.query.exam_pattern,
+  classValue: req.query.class,
+  section: req.query.section,
+  exam_date: req.query.exam_date
+});
+
+const validateExamDatasetContext = (context) => {
+  const required = ['school_id', 'program', 'exam_pattern', 'classValue', 'section', 'exam_date'];
+  return required.filter(field => !context[field]);
+};
+
+const applyExamDatasetFilters = (query, context) => query
+  .eq('school_id', context.school_id)
+  .eq('program', context.program)
+  .eq('exam_pattern', context.exam_pattern)
+  .eq('class', context.classValue)
+  .eq('section', context.section)
+  .eq('exam_date', context.exam_date);
+
+// Return one summary per uploaded exam rather than one row per student.
+export const getExamDatasets = async (req, res) => {
+  const { school_id } = req.params;
+  if (!school_id) {
+    return res.status(400).json({ error: 'school_id is required' });
+  }
+
+  try {
+    const rows = await fetchAllExams(query => query
+      .eq('school_id', school_id)
+      .not('student_id', 'is', null)
+      .not('exam_date', 'is', null)
+      .order('exam_date', { ascending: false })
+      .order('created_at', { ascending: false }));
+
+    const grouped = new Map();
+    rows.forEach(row => {
+      const key = [row.school_id, row.program, row.exam_pattern, row.class, row.section, row.exam_date || ''].join('|');
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          key,
+          school_id: row.school_id,
+          program: row.program,
+          exam_pattern: row.exam_pattern,
+          class: row.class,
+          section: row.section,
+          exam_date: row.exam_date,
+          created_at: row.created_at,
+          studentIds: new Set()
+        });
+      }
+
+      const dataset = grouped.get(key);
+      if (row.student_id) dataset.studentIds.add(row.student_id);
+      if (row.created_at && (!dataset.created_at || row.created_at > dataset.created_at)) {
+        dataset.created_at = row.created_at;
+      }
+    });
+
+    const datasets = Array.from(grouped.values()).map(({ studentIds, ...dataset }) => ({
+      ...dataset,
+      student_count: studentIds.size
+    }));
+
+    return res.status(200).json(datasets);
+  } catch (error) {
+    console.error('Get exam datasets error:', error);
+    return res.status(500).json({ error: 'Failed to load existing exams' });
+  }
+};
+
+export const getExamDatasetResults = async (req, res) => {
+  const context = getExamDatasetContext(req);
+  const missing = validateExamDatasetContext(context);
+  if (missing.length > 0) {
+    return res.status(400).json({ error: `Missing required parameters: ${missing.join(', ')}` });
+  }
+
+  try {
+    const results = await fetchAllExams(query => applyExamDatasetFilters(query, context)
+      .order('percentage', { ascending: false }));
+
+    if (results.length === 0) {
+      return res.status(404).json({ error: 'Exam data not found' });
+    }
+
+    return res.status(200).json(results);
+  } catch (error) {
+    console.error('Get exam dataset results error:', error);
+    return res.status(500).json({ error: 'Failed to load exam results' });
+  }
+};
+
+export const deleteExamDataset = async (req, res) => {
+  const context = getExamDatasetContext(req);
+  const missing = validateExamDatasetContext(context);
+  if (missing.length > 0) {
+    return res.status(400).json({ error: `Missing required parameters: ${missing.join(', ')}` });
+  }
+
+  try {
+    const { data: deletedRows, error: deleteError } = await applyExamDatasetFilters(
+      supabase.from('exams').delete(),
+      context
+    ).select('id');
+
+    if (deleteError) {
+      console.error('Delete exam dataset error:', deleteError);
+      return res.status(500).json({ error: 'Failed to delete exam data' });
+    }
+
+    const deletedCount = deletedRows?.length || 0;
+    if (deletedCount === 0) {
+      return res.status(404).json({ error: 'Exam data not found' });
+    }
+
+    const { error: rawDeleteError } = await supabase
+      .from('upload')
+      .delete()
+      .contains('data', {
+        school_id: context.school_id,
+        program: context.program,
+        exam_pattern: context.exam_pattern,
+        class: context.classValue,
+        section: context.section,
+        exam_date: context.exam_date
+      });
+
+    if (rawDeleteError) {
+      console.warn('Exam results deleted, but raw upload cleanup failed:', rawDeleteError);
+    }
+
+    const recalculations = await Promise.all([
+      supabase.rpc('calculate_grade_averages_for', {
+        p_school_id: context.school_id,
+        p_program: context.program,
+        p_class: context.classValue,
+        p_section: context.section
+      }),
+      supabase.rpc('calculate_cumulative_percentages_for', {
+        p_school_id: context.school_id,
+        p_class: context.classValue,
+        p_section: context.section
+      }),
+      supabase.rpc('calculate_grade_ranks_for', {
+        p_program: context.program,
+        p_exam_pattern: context.exam_pattern,
+        p_class: context.classValue
+      }),
+      supabase.rpc('calculate_all_india_rank_for', { p_class: context.classValue })
+    ]);
+
+    const recalculationErrors = recalculations
+      .map(result => result.error?.message)
+      .filter(Boolean);
+    if (recalculationErrors.length > 0) {
+      console.warn('Exam deleted, but some analytics recalculations failed:', recalculationErrors);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Exam data deleted successfully',
+      deletedCount,
+      rawUploadDeleted: !rawDeleteError,
+      analyticsRecalculated: recalculationErrors.length === 0
+    });
+  } catch (error) {
+    console.error('Unexpected delete exam dataset error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 export const getFoundations = (req, res) => {
   const FOUNDATIONS = [
     { id: 'IIT-MED', name: 'IIT-MED' },
@@ -1006,6 +1180,84 @@ export const getStudentsByClassSection = async (req, res) => {
     return res.status(200).json(data);
   } catch (err) {
     console.error('Error in getStudentsByClassSection:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// DELETE /api/schools/:school_id/students/:id - Delete one student registration
+export const deleteStudent = async (req, res) => {
+  const { school_id, id } = req.params;
+
+  if (!school_id || !id) {
+    return res.status(400).json({ error: 'school_id and student id are required' });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('students')
+      .delete()
+      .eq('id', id)
+      .eq('school_id', school_id)
+      .select('id, student_id, name');
+
+    if (error) {
+      console.error('Delete student error:', error);
+      return res.status(500).json({ error: 'Failed to delete student' });
+    }
+
+    if (!data || data.length === 0) {
+      return res.status(404).json({ error: 'Student not found in the selected school' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Student deleted successfully',
+      student: data[0]
+    });
+  } catch (err) {
+    console.error('Unexpected delete student error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// DELETE /api/schools/:school_id/students?class=...&section=...
+// Deletes registrations only for the explicitly selected class-section.
+export const deleteStudentsByClassSection = async (req, res) => {
+  const { school_id } = req.params;
+  const { class: classValue, section: sectionValue } = req.query;
+
+  if (!school_id || !classValue || !sectionValue) {
+    return res.status(400).json({
+      error: 'Missing required parameters: school_id, class, section'
+    });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('students')
+      .delete()
+      .eq('school_id', school_id)
+      .eq('class', classValue)
+      .eq('section', sectionValue)
+      .select('id');
+
+    if (error) {
+      console.error('Bulk delete students error:', error);
+      return res.status(500).json({ error: 'Failed to delete students' });
+    }
+
+    const deletedCount = data?.length || 0;
+    if (deletedCount === 0) {
+      return res.status(404).json({ error: 'No students found in the selected class-section' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `${deletedCount} student${deletedCount === 1 ? '' : 's'} deleted successfully`,
+      deletedCount
+    });
+  } catch (err) {
+    console.error('Unexpected bulk delete students error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };

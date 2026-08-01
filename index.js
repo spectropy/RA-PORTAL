@@ -120,6 +120,11 @@ app.post('/api/schools/:school_id/students/upload',
   schoolController.uploadStudents
 );
 app.get('/api/schools/:school_id/students', schoolController.getStudentsByClassSection);
+app.delete('/api/schools/:school_id/students', schoolController.deleteStudentsByClassSection);
+app.delete('/api/schools/:school_id/students/:id', schoolController.deleteStudent);
+app.get('/api/schools/:school_id/exam-datasets', schoolController.getExamDatasets);
+app.get('/api/schools/:school_id/exam-datasets/results', schoolController.getExamDatasetResults);
+app.delete('/api/schools/:school_id/exam-datasets', schoolController.deleteExamDataset);
 app.post('/api/students/login', schoolController.loginStudentByStudentId);
 app.post('/api/teachers/login', schoolController.loginTeacherByTeacherId);
 
