@@ -5,7 +5,7 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
- 
+
 const STATES = {
   "Andhra Pradesh": "AP", "Arunachal Pradesh": "AR", "Assam": "AS", "Bihar": "BR",
   "Chhattisgarh": "CG", "Goa": "GA", "Gujarat": "GJ", "Haryana": "HR", "Himachal Pradesh": "HP",
@@ -474,6 +474,8 @@ export const uploadStudents = async (req, res) => {
       class: classValue,
       section: sectionValue,
       gender: record['Gender'] || record['gender'] || null,
+      parent_phone: parentPhone,
+      parent_email: parentEmail,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
@@ -570,28 +572,43 @@ export const createExam = async (req, res) => {
   }
 };
 // ✅ GET /api/exams - Get all exams — REQUIRED BY FRONTEND
+// Fetch every matching exam row instead of stopping at Supabase's 1,000-row limit.
+const fetchAllExams = async (applyFilters = query => query, columns = '*') => {
+  const pageSize = 1000;
+  const allRows = [];
+  let from = 0;
+
+  while (true) {
+    let query = supabase
+      .from('exams')
+      .select(columns)
+      .range(from, from + pageSize - 1);
+    query = applyFilters(query);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const rows = Array.isArray(data) ? data : [];
+    allRows.push(...rows);
+    if (rows.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return allRows;
+};
+
 export const getExams = async (req, res) => {
   try {
     console.log('🔍 getExams query params:', req.query); // 👈 ADD THIS
 
-    let query = supabase.from('exams').select('*');
-    
-    if (req.query.school_id) {
-      query = query.eq('school_id', req.query.school_id);
-    }
-    if (req.query.exam_pattern) {
-      query = query.eq('exam_pattern', req.query.exam_pattern);
-    }
-    if (req.query.class) {
-      query = query.eq('class', req.query.class);
-    }
-    if (req.query.section) {
-      query = query.eq('section', req.query.section);
-    }
-    query = query.order('created_at', { ascending: false });
-
-    const { data, error } = await query;
-    if (error) return res.status(500).json({ error: 'Database query failed: ' + error.message });
+    const data = await fetchAllExams(query => {
+      let filteredQuery = query;
+      if (req.query.school_id) filteredQuery = filteredQuery.eq('school_id', req.query.school_id);
+      if (req.query.exam_pattern) filteredQuery = filteredQuery.eq('exam_pattern', req.query.exam_pattern);
+      if (req.query.class) filteredQuery = filteredQuery.eq('class', req.query.class);
+      if (req.query.section) filteredQuery = filteredQuery.eq('section', req.query.section);
+      return filteredQuery.order('created_at', { ascending: false });
+    });
 
     console.log('✅ getExams found:', data.length, 'records'); // 👈 ADD THIS
     console.log('📋 First record:', data[0]); // 👈 ADD THIS
@@ -604,6 +621,170 @@ export const getExams = async (req, res) => {
 };
 
 // ✅ GET /api/foundations - MUST MATCH FRONTEND
+const normalizeExamDate = examDate => {
+  if (!examDate) return null;
+  const normalized = String(examDate).trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : null;
+};
+
+const getExamDatasetContext = req => ({
+  school_id: String(req.params.school_id || '').trim(),
+  program: String(req.query.program || '').trim(),
+  exam_pattern: String(req.query.exam_pattern || '').trim(),
+  classValue: String(req.query.class || '').trim(),
+  section: String(req.query.section || '').trim(),
+  exam_date: normalizeExamDate(req.query.exam_date)
+});
+
+const validateExamDatasetContext = context => {
+  const required = ['school_id', 'program', 'exam_pattern', 'classValue', 'section', 'exam_date'];
+  return required.filter(field => !context[field]);
+};
+
+const applyExamDatasetFilters = (query, context) => query
+  .eq('school_id', context.school_id)
+  .eq('program', context.program)
+  .eq('exam_pattern', context.exam_pattern)
+  .eq('class', context.classValue)
+  .eq('section', context.section)
+  .eq('exam_date', context.exam_date);
+
+// Return one summary row for each uploaded exam dataset.
+export const getExamDatasets = async (req, res) => {
+  const schoolId = String(req.params.school_id || '').trim();
+  if (!schoolId) return res.status(400).json({ error: 'school_id is required' });
+
+  try {
+    const rows = await fetchAllExams(query => query
+      .eq('school_id', schoolId)
+      .not('student_id', 'is', null)
+      .not('exam_date', 'is', null)
+      .order('exam_date', { ascending: false })
+      .order('created_at', { ascending: false }));
+
+    const grouped = new Map();
+    rows.forEach(row => {
+      const examDate = normalizeExamDate(row.exam_date);
+      const key = [row.school_id, row.program, row.exam_pattern, row.class, row.section, examDate].join('|');
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          key,
+          school_id: row.school_id,
+          program: row.program,
+          exam_pattern: row.exam_pattern,
+          class: row.class,
+          section: row.section,
+          exam_date: examDate,
+          created_at: row.created_at,
+          studentIds: new Set()
+        });
+      }
+
+      const dataset = grouped.get(key);
+      if (row.student_id) dataset.studentIds.add(row.student_id);
+      if (row.created_at && (!dataset.created_at || row.created_at > dataset.created_at)) {
+        dataset.created_at = row.created_at;
+      }
+    });
+
+    const datasets = Array.from(grouped.values()).map(({ studentIds, ...dataset }) => ({
+      ...dataset,
+      student_count: studentIds.size
+    }));
+    return res.status(200).json(datasets);
+  } catch (error) {
+    console.error('Get exam datasets error:', error);
+    return res.status(500).json({ error: 'Failed to load existing exams' });
+  }
+};
+
+export const getExamDatasetResults = async (req, res) => {
+  const context = getExamDatasetContext(req);
+  const missing = validateExamDatasetContext(context);
+  if (missing.length) {
+    return res.status(400).json({ error: `Missing or invalid parameters: ${missing.join(', ')}` });
+  }
+
+  try {
+    const results = await fetchAllExams(query => applyExamDatasetFilters(query, context)
+      .order('percentage', { ascending: false }));
+    if (!results.length) return res.status(404).json({ error: 'Exam data not found' });
+    return res.status(200).json(results);
+  } catch (error) {
+    console.error('Get exam dataset results error:', error);
+    return res.status(500).json({ error: 'Failed to load exam results' });
+  }
+};
+
+export const deleteExamDataset = async (req, res) => {
+  const context = getExamDatasetContext(req);
+  const missing = validateExamDatasetContext(context);
+  if (missing.length) {
+    return res.status(400).json({ error: `Missing or invalid parameters: ${missing.join(', ')}` });
+  }
+
+  try {
+    const { data: deletedRows, error: deleteError } = await applyExamDatasetFilters(
+      supabase.from('exams').delete(),
+      context
+    ).select('id');
+
+    if (deleteError) throw deleteError;
+    if (!deletedRows?.length) return res.status(404).json({ error: 'Exam data not found' });
+
+    const { error: rawDeleteError } = await supabase
+      .from('upload')
+      .delete()
+      .contains('data', {
+        school_id: context.school_id,
+        program: context.program,
+        exam_pattern: context.exam_pattern,
+        class: context.classValue,
+        section: context.section,
+        exam_date: context.exam_date
+      });
+
+    const recalculations = await Promise.all([
+      supabase.rpc('calculate_grade_averages_for', {
+        p_school_id: context.school_id,
+        p_program: context.program,
+        p_class: context.classValue,
+        p_section: context.section
+      }),
+      supabase.rpc('calculate_cumulative_percentages_for', {
+        p_school_id: context.school_id,
+        p_class: context.classValue,
+        p_section: context.section
+      }),
+      supabase.rpc('calculate_grade_ranks_for', {
+        p_program: context.program,
+        p_exam_pattern: context.exam_pattern,
+        p_class: context.classValue
+      }),
+      supabase.rpc('calculate_all_india_rank_for', { p_class: context.classValue })
+    ]);
+
+    const recalculationErrors = recalculations.map(result => result.error?.message).filter(Boolean);
+    if (rawDeleteError || recalculationErrors.length) {
+      console.warn('Exam deleted with cleanup warnings:', {
+        rawUpload: rawDeleteError?.message,
+        analytics: recalculationErrors
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Exam data deleted successfully',
+      deletedCount: deletedRows.length,
+      rawUploadDeleted: !rawDeleteError,
+      analyticsRecalculated: recalculationErrors.length === 0
+    });
+  } catch (error) {
+    console.error('Delete exam dataset error:', error);
+    return res.status(500).json({ error: 'Failed to delete exam data' });
+  }
+};
+
 export const getFoundations = (req, res) => {
   const FOUNDATIONS = [
     { id: 'IIT-MED', name: 'IIT-MED' },
@@ -616,11 +797,19 @@ export const getFoundations = (req, res) => {
 // ✅ GET /api/programs - MUST MATCH FRONTEND
 export const getPrograms = (req, res) => {
   const PROGRAMS = [
+    { id: 'SPHS', name: 'SPHS' },
+    { id: 'MAESTRO', name: 'MAESTRO' },
+    { id: 'GHS', name: 'GHS' },
+    { id: 'SFS', name: 'SFS' },
+    { id: 'KTS', name: 'KTS' },
+    { id: 'VIJAYA', name: 'VIJAYA' },
+    { id: 'PHS', name: 'PHS' },
+    { id: 'KPS', name: 'KPS' },
+    { id: 'SPR', name: 'SPR' },
+    { id: 'FF', name: 'FF' },
     { id: 'CAT', name: 'CAT' },
-    { id: 'FF', name: 'FF'},
-    { id: 'MAE', name: 'MAE' },
-    { id: 'PIO', name: 'PIO' },
-    { id: 'NGHS_MAE', name: 'NGHS_MAE'}
+    { id: 'SPARK', name: 'SPARK' },
+    { id: 'MANAIR_MAESTRO', name: 'MANAIR_MAESTRO' }
   ];
   res.json(PROGRAMS);
 };
@@ -863,6 +1052,8 @@ export const uploadExamResults = async (req, res) => {
       });
     }
 
+    const analyticsWarnings = [];
+
     // ✅ STEP 1: Recalculate ranks (safe: not in a trigger)
     const { error: rankError } = await supabase.rpc('calculate_exam_ranks', {
   p_school_id: school_id,
@@ -874,6 +1065,7 @@ export const uploadExamResults = async (req, res) => {
 });
     if (rankError) {
       console.warn('⚠️ Rank recalculation failed:', rankError);
+      analyticsWarnings.push(`Exam ranks: ${rankError.message}`);
       // Don't fail the whole request — proceed with '-' ranks if needed
     }
 
@@ -888,6 +1080,7 @@ export const uploadExamResults = async (req, res) => {
 });
     if (examAvgError) {
       console.warn('⚠️ Exam averages recalculation failed:', examAvgError);
+      analyticsWarnings.push(`Exam averages: ${examAvgError.message}`);
     }
 
     // ✅ STEP 3: Recalculate grade-level averages
@@ -899,9 +1092,21 @@ export const uploadExamResults = async (req, res) => {
 });
     if (gradeAvgError) {
       console.warn('⚠️ Grade averages recalculation failed:', gradeAvgError);
+      analyticsWarnings.push(`Grade averages: ${gradeAvgError.message}`);
     }
 
-    // ✅ STEP 4: Recalculate grade ranks
+    // ✅ STEP 4: Recalculate cumulative percentages for the class-section
+    const { error: cumulativeError } = await supabase.rpc('calculate_cumulative_percentages_for', {
+      p_school_id: school_id,
+      p_class: examClass,
+      p_section: examSection
+    });
+    if (cumulativeError) {
+      console.warn('⚠️ Cumulative percentage recalculation failed:', cumulativeError);
+      analyticsWarnings.push(`Cumulative percentages: ${cumulativeError.message}`);
+    }
+
+    // ✅ STEP 5: Recalculate grade ranks
     const { error: gradeRankError } = await supabase.rpc('calculate_grade_ranks_for', {
   p_program: program,
   p_exam_pattern: exam_pattern,
@@ -909,17 +1114,19 @@ export const uploadExamResults = async (req, res) => {
 });
     if (gradeRankError) {
       console.warn('⚠️ Grade rank recalculation failed:', gradeRankError);
+      analyticsWarnings.push(`Grade ranks: ${gradeRankError.message}`);
     }
     
-    // ✅ STEP 5: Recalculate All India Rank
+    // ✅ STEP 6: Recalculate All India Rank
     const { error: allIndiaRankError } = await supabase.rpc('calculate_all_india_rank_for', {
   p_class: examClass
 });
     if (allIndiaRankError) {
     console.warn('⚠️ All India rank recalculation failed:', allIndiaRankError);
+    analyticsWarnings.push(`All India ranks: ${allIndiaRankError.message}`);
     }
 
-    // ✅ STEP 6: Fetch results (now with real ranks and averages if recalc succeeded)
+    // ✅ STEP 7: Fetch results (now with real ranks and averages if recalc succeeded)
     const { data: results, error: fetchError } = await supabase
       .from('exams')
       .select(`
@@ -936,6 +1143,7 @@ export const uploadExamResults = async (req, res) => {
         biology_marks,
         total_marks,
         percentage,
+        cumulative_percentage,
         class_rank,
         school_rank,
         all_schools_rank
@@ -956,7 +1164,8 @@ export const uploadExamResults = async (req, res) => {
     return res.status(200).json({
       success: true,
       count: uploadRows.length,
-      results: results || []
+      results: results || [],
+      analytics_warnings: analyticsWarnings
     });
 
   } catch (err) {
@@ -1147,6 +1356,7 @@ export const getStudentExamResults = async (req, res) => {
         biology_marks,
         total_marks,
         percentage,
+        cumulative_percentage,
         class_rank,
         school_rank,
         all_schools_rank,
@@ -1196,6 +1406,7 @@ export const getStudentExamResults = async (req, res) => {
   max_marks_biology: parseInt(r.max_marks_biology) || 0,
   total: parseFloat(r.total_marks) || 0,
   percentage: parseFloat(r.percentage) || 0,
+  cumulative_percentage: r.cumulative_percentage == null ? null : parseFloat(r.cumulative_percentage),
   class_rank: r.class_rank || '-',
   school_rank: r.school_rank || '-',
   all_schools_rank: r.all_schools_rank || '-',
@@ -1559,5 +1770,259 @@ export const getDashboardData = async (req, res) => {
   } catch (err) {
     console.error('getDashboardData error:', err);
     return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Delete one student registration from the selected school.
+export const deleteStudent = async (req, res) => {
+  const { school_id, id } = req.params;
+  if (!school_id || !id) {
+    return res.status(400).json({ error: 'school_id and student id are required' });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('students')
+      .delete()
+      .eq('id', id)
+      .eq('school_id', school_id)
+      .select('id, student_id, name');
+
+    if (error) throw error;
+    if (!data?.length) {
+      return res.status(404).json({ error: 'Student not found in the selected school' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Student deleted successfully',
+      student: data[0]
+    });
+  } catch (error) {
+    console.error('Delete student error:', error);
+    return res.status(500).json({ error: 'Failed to delete student' });
+  }
+};
+
+// Delete every student registration in one explicitly selected class-section.
+export const deleteStudentsByClassSection = async (req, res) => {
+  const { school_id } = req.params;
+  const classValue = String(req.query.class || '').trim();
+  const sectionValue = String(req.query.section || '').trim();
+
+  if (!school_id || !classValue || !sectionValue) {
+    return res.status(400).json({ error: 'Missing required parameters: school_id, class, section' });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('students')
+      .delete()
+      .eq('school_id', school_id)
+      .eq('class', classValue)
+      .eq('section', sectionValue)
+      .select('id');
+
+    if (error) throw error;
+    if (!data?.length) {
+      return res.status(404).json({ error: 'No students found in the selected class-section' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `${data.length} student${data.length === 1 ? '' : 's'} deleted successfully`,
+      deletedCount: data.length
+    });
+  } catch (error) {
+    console.error('Bulk delete students error:', error);
+    return res.status(500).json({ error: 'Failed to delete students' });
+  }
+};
+
+const normalizeTeacherSubject = subject => {
+  const normalized = String(subject || '').trim().toLowerCase();
+  if (normalized === 'physics') return 'Physics';
+  if (normalized === 'chemistry') return 'Chemistry';
+  if (normalized === 'biology') return 'Biology';
+  if (['maths', 'math', 'mathematics'].includes(normalized)) return 'Maths';
+  return null;
+};
+
+const normalizeTeacherClassSection = (classValue, sectionValue) =>
+  `${String(classValue || 'N/A').trim()}-${String(sectionValue || 'N/A').trim()}`;
+
+const buildTeacherExamIdentity = ({ school_id, program, exam_pattern, exam_date, class_section }) =>
+  [school_id, program, exam_pattern, normalizeExamDate(exam_date) || 'NO_DATE', class_section]
+    .map(value => String(value || 'N/A').trim())
+    .join('|');
+
+const buildTeacherAverageLookup = exams => {
+  const averagesByKey = new Map();
+
+  exams.forEach(exam => {
+    const classSection = normalizeTeacherClassSection(exam.class, exam.section);
+    const key = buildTeacherExamIdentity({ ...exam, class_section: classSection });
+    if (averagesByKey.has(key)) return;
+
+    averagesByKey.set(key, {
+      school_id: exam.school_id,
+      program: exam.program,
+      exam_pattern: exam.exam_pattern,
+      exam_date: normalizeExamDate(exam.exam_date),
+      class_section: classSection,
+      Physics: exam.phy_exam_per_average == null ? null : Number(exam.phy_exam_per_average),
+      Chemistry: exam.chem_exam_per_average == null ? null : Number(exam.chem_exam_per_average),
+      Maths: exam.math_exam_per_average == null ? null : Number(exam.math_exam_per_average),
+      Biology: exam.bioexam_per_average == null ? null : Number(exam.bioexam_per_average)
+    });
+  });
+
+  return averagesByKey;
+};
+
+const calculateRankForAverage = (rows, average) =>
+  rows.filter(row => row.average > average).length + 1;
+
+// Return the teacher's subject averages and rank for every matching exam context.
+export const getTeacherRanks = async (req, res) => {
+  const teacherId = String(req.params.teacher_id || req.body?.teacher_id || '').trim().toUpperCase();
+  const requestedSchoolId = String(req.body?.school_id || '').trim() || null;
+  const providedAssignments = Array.isArray(req.body?.assignments) ? req.body.assignments : null;
+  if (!teacherId) return res.status(400).json({ error: 'teacher_id is required' });
+
+  try {
+    const { data: targetTeacher, error: targetTeacherError } = await supabase
+      .from('teachers')
+      .select('id, teacher_id, name, school_id')
+      .eq('teacher_id', teacherId)
+      .single();
+    if (targetTeacherError || !targetTeacher) {
+      return res.status(404).json({ error: 'Teacher not found' });
+    }
+
+    const { data: teachers, error: teachersError } = await supabase
+      .from('teachers')
+      .select('id, teacher_id, name, school_id');
+    if (teachersError) throw teachersError;
+
+    const teacherRowIds = (teachers || []).map(teacher => teacher.id);
+    let assignments = [];
+    if (teacherRowIds.length) {
+      const { data, error } = await supabase
+        .from('teacher_assignments')
+        .select('teacher_id, class, section, subject')
+        .in('teacher_id', teacherRowIds);
+      if (error) throw error;
+      assignments = data || [];
+    }
+
+    let targetAssignments = providedAssignments;
+    if (!targetAssignments) {
+      targetAssignments = assignments.filter(assignment => assignment.teacher_id === targetTeacher.id);
+    }
+
+    const exams = await fetchAllExams(query => query, `
+      school_id,
+      program,
+      exam_pattern,
+      exam_date,
+      class,
+      section,
+      phy_exam_per_average,
+      chem_exam_per_average,
+      math_exam_per_average,
+      bioexam_per_average
+    `);
+
+    const effectiveSchoolId = requestedSchoolId || targetTeacher.school_id;
+    const averageLookup = buildTeacherAverageLookup(exams);
+    const assignmentsByTeacher = new Map();
+
+    assignments.forEach(assignment => {
+      const subject = normalizeTeacherSubject(assignment.subject);
+      if (!subject) return;
+      const teacherAssignments = assignmentsByTeacher.get(assignment.teacher_id) || [];
+      teacherAssignments.push({
+        class_section: normalizeTeacherClassSection(assignment.class, assignment.section),
+        subject
+      });
+      assignmentsByTeacher.set(assignment.teacher_id, teacherAssignments);
+    });
+
+    const normalizedAssignments = Array.from(new Map(
+      (targetAssignments || [])
+        .map(assignment => ({
+          class_section: normalizeTeacherClassSection(assignment.class, assignment.section),
+          subject: normalizeTeacherSubject(assignment.subject)
+        }))
+        .filter(assignment => assignment.subject)
+        .map(assignment => [`${assignment.class_section}|${assignment.subject}`, assignment])
+    ).values());
+
+    const rows = [];
+    for (const context of averageLookup.values()) {
+      if (context.school_id !== effectiveSchoolId) continue;
+
+      for (const assignment of normalizedAssignments) {
+        if (assignment.class_section !== context.class_section) continue;
+        const average = context[assignment.subject];
+        if (!Number.isFinite(average)) continue;
+
+        const comparisonRows = [];
+        (teachers || []).forEach(teacher => {
+          const matchingAssignment = (assignmentsByTeacher.get(teacher.id) || []).find(candidate =>
+            candidate.class_section === assignment.class_section && candidate.subject === assignment.subject
+          );
+          if (!matchingAssignment) return;
+
+          const comparison = averageLookup.get(buildTeacherExamIdentity({
+            school_id: teacher.school_id,
+            program: context.program,
+            exam_pattern: context.exam_pattern,
+            exam_date: context.exam_date,
+            class_section: assignment.class_section
+          }));
+          const comparisonAverage = comparison?.[assignment.subject];
+          if (Number.isFinite(comparisonAverage)) comparisonRows.push({ average: comparisonAverage });
+        });
+
+        rows.push({
+          teacher_id: targetTeacher.teacher_id,
+          teacher_name: targetTeacher.name,
+          school_id: effectiveSchoolId,
+          program: context.program,
+          exam_pattern: context.exam_pattern,
+          exam_date: context.exam_date,
+          class_section: assignment.class_section,
+          subject: assignment.subject,
+          average,
+          all_india_rank: calculateRankForAverage(comparisonRows, average)
+        });
+      }
+    }
+
+    const uniqueRows = Array.from(new Map(rows.map(row => [
+      `${row.program}|${row.exam_pattern}|${row.exam_date}|${row.class_section}|${row.subject}`,
+      row
+    ])).values()).sort((a, b) =>
+      a.program.localeCompare(b.program) ||
+      a.exam_pattern.localeCompare(b.exam_pattern) ||
+      String(a.exam_date).localeCompare(String(b.exam_date)) ||
+      a.class_section.localeCompare(b.class_section) ||
+      a.subject.localeCompare(b.subject)
+    );
+
+    return res.json({
+      success: true,
+      teacher: {
+        teacher_id: targetTeacher.teacher_id,
+        name: targetTeacher.name,
+        school_id: effectiveSchoolId
+      },
+      rows: uniqueRows
+    });
+  } catch (error) {
+    console.error('Teacher rank fetch error:', error);
+    return res.status(500).json({ error: 'Failed to calculate teacher rankings' });
   }
 };

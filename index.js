@@ -106,14 +106,20 @@ app.post('/api/schools/:school_id/students/upload',
   schoolController.uploadStudents
 );
 app.get('/api/schools/:school_id/students', schoolController.getStudentsByClassSection);
+app.delete('/api/schools/:school_id/students', schoolController.deleteStudentsByClassSection);
+app.delete('/api/schools/:school_id/students/:id', schoolController.deleteStudent);
 app.post('/api/students/login', schoolController.loginStudentByStudentId);
 app.post('/api/teachers/login', schoolController.loginTeacherByTeacherId);
+app.post('/api/teachers/:teacher_id/ranks', schoolController.getTeacherRanks);
 
 // Get single school by ID (used in ExamsRegistration.jsx for class dropdown)
 app.get('/api/schools/:school_id', schoolController.getSchoolById);
 
 // Get all exams (used to populate exams table in ExamsRegistration.jsx)
 app.get('/api/exams', schoolController.getExams);
+app.get('/api/schools/:school_id/exam-datasets', schoolController.getExamDatasets);
+app.get('/api/schools/:school_id/exam-datasets/results', schoolController.getExamDatasetResults);
+app.delete('/api/schools/:school_id/exam-datasets', schoolController.deleteExamDataset);
 // Exams creation
 app.post('/api/exams', schoolController.createExam);
 app.post('/api/exams/:exam_id/results/upload', upload.single('file'), schoolController.uploadExamResults);
