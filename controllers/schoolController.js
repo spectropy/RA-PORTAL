@@ -476,6 +476,8 @@ export const uploadStudents = async (req, res) => {
       gender: record['Gender'] || record['gender'] || null,
       parent_phone: parentPhone,
       parent_email: parentEmail,
+      parent_phone: parentPhone,
+      parent_email: parentEmail,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
@@ -1118,6 +1120,7 @@ export const uploadExamResults = async (req, res) => {
     }
     
     // ✅ STEP 6: Recalculate All India Rank
+    // ✅ STEP 6: Recalculate All India Rank
     const { error: allIndiaRankError } = await supabase.rpc('calculate_all_india_rank_for', {
   p_class: examClass
 });
@@ -1126,6 +1129,7 @@ export const uploadExamResults = async (req, res) => {
     analyticsWarnings.push(`All India ranks: ${allIndiaRankError.message}`);
     }
 
+    // ✅ STEP 7: Fetch results (now with real ranks and averages if recalc succeeded)
     // ✅ STEP 7: Fetch results (now with real ranks and averages if recalc succeeded)
     const { data: results, error: fetchError } = await supabase
       .from('exams')
@@ -1206,9 +1210,442 @@ export const getStudentsByClassSection = async (req, res) => {
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
+
+// Legacy copy retained for compatibility while the corrected handler below is exported.
+const legacyDeleteStudent = async (req, res) => {
+  const { school_id, id } = req.params;
+
+  if (!school_id || !id) {
+    return res.status(400).json({ error: 'school_id and student id are required' });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('students')
+      .delete()
+      .eq('id', id)
+      .eq('school_id', school_id)
+      .select('id, student_id, name');
+
+    if (error) {
+      console.error('Delete student error:', error);
+      return res.status(500).json({ error: 'Failed to delete student' });
+    }
+
+    if (!data || data.length === 0) {
+      return res.status(404).json({ error: 'Student not found in the selected school' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Student deleted successfully',
+      student: data[0]
+    });
+  } catch (err) {
+    console.error('Unexpected delete student error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// DELETE /api/schools/:school_id/students?class=...&section=...
+// Deletes registrations only for the explicitly selected class-section.
+const legacyDeleteStudentsByClassSection = async (req, res) => {
+  const { school_id } = req.params;
+  const { class: classValue, section: sectionValue } = req.query;
+
+  if (!school_id || !classValue || !sectionValue) {
+    return res.status(400).json({
+      error: 'Missing required parameters: school_id, class, section'
+    });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('students')
+      .delete()
+      .eq('school_id', school_id)
+      .eq('class', classValue)
+      .eq('section', sectionValue)
+      .select('id');
+
+    if (error) {
+      console.error('Bulk delete students error:', error);
+      return res.status(500).json({ error: 'Failed to delete students' });
+    }
+
+    const deletedCount = data?.length || 0;
+    if (deletedCount === 0) {
+      return res.status(404).json({ error: 'No students found in the selected class-section' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `${deletedCount} student${deletedCount === 1 ? '' : 's'} deleted successfully`,
+      deletedCount
+    });
+  } catch (err) {
+    console.error('Unexpected bulk delete students error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+const legacyNormalizeTeacherSubject = (subject) => {
+  if (!subject) return null;
+  const normalized = String(subject).trim().toLowerCase();
+
+  if (normalized === 'physics') return 'Physics';
+  if (normalized === 'chemistry') return 'Chemistry';
+  if (normalized === 'biology') return 'Biology';
+  if (normalized === 'maths' || normalized === 'math' || normalized === 'mathematics') return 'Maths';
+
+  return null;
+};
+
+const legacyNormalizeTeacherClassSection = (classValue, sectionValue) =>
+  `${String(classValue || 'N/A').trim()}-${String(sectionValue || 'N/A').trim()}`;
+
+const normalizeTeacherExamDate = (examDate) => {
+  if (!examDate) return 'NO_DATE';
+  return String(examDate).trim();
+};
+
+const legacyBuildTeacherExamIdentity = ({ school_id, program, exam_pattern, exam_date, class_section }) =>
+  [
+    String(school_id || 'N/A').trim(),
+    String(program || 'N/A').trim(),
+    String(exam_pattern || 'N/A').trim(),
+    normalizeTeacherExamDate(exam_date),
+    String(class_section || 'N/A').trim()
+  ].join('|');
+
+const legacyBuildTeacherAverageLookup = (exams) => {
+  const groupedExamScores = new Map();
+
+  exams.forEach((exam) => {
+    const schoolId = exam.school_id || 'N/A';
+    const program = exam.program || 'N/A';
+    const examPattern = exam.exam_pattern || 'N/A';
+    const examDate = normalizeTeacherExamDate(exam.exam_date);
+    const classSection = legacyNormalizeTeacherClassSection(exam.class, exam.section);
+    const key = legacyBuildTeacherExamIdentity({
+      school_id: schoolId,
+      program,
+      exam_pattern: examPattern,
+      exam_date: examDate,
+      class_section: classSection
+    });
+
+    if (!groupedExamScores.has(key)) {
+      groupedExamScores.set(key, {
+        school_id: schoolId,
+        program,
+        exam_pattern: examPattern,
+        exam_date: examDate,
+        class_section: classSection,
+        Physics: [],
+        Chemistry: [],
+        Biology: [],
+        Maths: []
+      });
+    }
+
+    const bucket = groupedExamScores.get(key);
+    if (exam.physics_percentage != null && exam.physics_percentage !== '') {
+      bucket.Physics.push(parseFloat(exam.physics_percentage));
+    }
+    if (exam.chemistry_percentage != null && exam.chemistry_percentage !== '') {
+      bucket.Chemistry.push(parseFloat(exam.chemistry_percentage));
+    }
+    if (exam.biology_percentage != null && exam.biology_percentage !== '') {
+      bucket.Biology.push(parseFloat(exam.biology_percentage));
+    }
+    if (exam.maths_percentage != null && exam.maths_percentage !== '') {
+      bucket.Maths.push(parseFloat(exam.maths_percentage));
+    }
+  });
+
+  const averagesByKey = new Map();
+  groupedExamScores.forEach((bucket, key) => {
+    averagesByKey.set(key, {
+      school_id: bucket.school_id,
+      program: bucket.program,
+      exam_pattern: bucket.exam_pattern,
+      exam_date: bucket.exam_date,
+      class_section: bucket.class_section,
+      Physics: bucket.Physics.length ? parseFloat((bucket.Physics.reduce((a, b) => a + b, 0) / bucket.Physics.length).toFixed(1)) : null,
+      Chemistry: bucket.Chemistry.length ? parseFloat((bucket.Chemistry.reduce((a, b) => a + b, 0) / bucket.Chemistry.length).toFixed(1)) : null,
+      Biology: bucket.Biology.length ? parseFloat((bucket.Biology.reduce((a, b) => a + b, 0) / bucket.Biology.length).toFixed(1)) : null,
+      Maths: bucket.Maths.length ? parseFloat((bucket.Maths.reduce((a, b) => a + b, 0) / bucket.Maths.length).toFixed(1)) : null,
+    });
+  });
+
+  return averagesByKey;
+};
+
+const legacyFetchAllExams = async (applyFilters = (query) => query) => {
+  const pageSize = 1000;
+  let from = 0;
+  const allRows = [];
+
+  while (true) {
+    let query = supabase.from('exams').select('*').range(from, from + pageSize - 1);
+    query = applyFilters(query);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const rows = Array.isArray(data) ? data : [];
+    allRows.push(...rows);
+
+    if (rows.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return allRows;
+};
+
+const legacyCalculateRankForAverage = (rows, average) => {
+  if (!Array.isArray(rows) || rows.length === 0) return 1;
+  const higherScores = rows.filter((row) => row.average > average).length;
+  return higherScores + 1;
+};
+
+// Legacy teacher-ranking implementation; the corrected exported handler is below.
+const legacyGetTeacherRanks = async (req, res) => {
+  const teacherId = (req.params.teacher_id || req.body?.teacher_id || '').trim().toUpperCase();
+  const providedAssignments = Array.isArray(req.body?.assignments) ? req.body.assignments : null;
+  const requestedSchoolId = req.body?.school_id?.trim?.() || null;
+
+  if (!teacherId) {
+    return res.status(400).json({ error: 'teacher_id is required' });
+  }
+
+  try {
+    const { data: targetTeacher, error: targetTeacherError } = await supabase
+      .from('teachers')
+      .select('id, teacher_id, name, school_id')
+      .eq('teacher_id', teacherId)
+      .single();
+
+    if (targetTeacherError || !targetTeacher) {
+      return res.status(404).json({ error: 'Teacher not found' });
+    }
+
+    const { data: teachers, error: teachersError } = await supabase
+      .from('teachers')
+      .select('id, teacher_id, name, school_id');
+
+    if (teachersError) {
+      return res.status(500).json({ error: 'Failed to fetch teachers' });
+    }
+
+    const teacherRowIds = (teachers || []).map((teacher) => teacher.id);
+    const { data: assignments, error: assignmentsError } = await supabase
+      .from('teacher_assignments')
+      .select('teacher_id, class, section, subject')
+      .in('teacher_id', teacherRowIds);
+
+    if (assignmentsError) {
+      return res.status(500).json({ error: 'Failed to fetch teacher assignments' });
+    }
+
+    let targetAssignments = providedAssignments;
+    if (!targetAssignments) {
+      const { data, error: targetAssignmentsError } = await supabase
+        .from('teacher_assignments')
+        .select('class, section, subject')
+        .eq('teacher_id', targetTeacher.id);
+
+      if (targetAssignmentsError) {
+        return res.status(500).json({ error: 'Failed to fetch target teacher assignments' });
+      }
+
+      targetAssignments = data;
+    }
+
+    const exams = await fetchAllExams((query) =>
+      query.select(`
+        school_id,
+        program,
+        exam_pattern,
+        exam_date,
+        class,
+        section,
+        physics_percentage,
+        chemistry_percentage,
+        biology_percentage,
+        maths_percentage
+      `)
+    );
+
+    const effectiveSchoolId = requestedSchoolId || targetTeacher.school_id;
+    const averageLookup = buildTeacherAverageLookup(exams || []);
+    const assignmentsByTeacher = new Map();
+    (assignments || []).forEach((assignment) => {
+      const subject = normalizeTeacherSubject(assignment.subject);
+      if (!subject) return;
+
+      const teacherAssignments = assignmentsByTeacher.get(assignment.teacher_id) || [];
+      teacherAssignments.push({
+        class_section: normalizeTeacherClassSection(assignment.class, assignment.section),
+        subject
+      });
+      assignmentsByTeacher.set(assignment.teacher_id, teacherAssignments);
+    });
+
+    const normalizedAssignments = Array.from(
+      new Map(
+        (targetAssignments || [])
+          .map((assignment) => ({
+            class_section: normalizeTeacherClassSection(assignment.class, assignment.section),
+            subject: normalizeTeacherSubject(assignment.subject)
+          }))
+          .filter((assignment) => assignment.subject)
+          .map((assignment) => [`${assignment.class_section}|${assignment.subject}`, assignment])
+      ).values()
+    );
+    assignmentsByTeacher.set(targetTeacher.id, normalizedAssignments);
+
+    const targetAverageContexts = Array.from(averageLookup.values())
+      .filter((bucket) => bucket.school_id === effectiveSchoolId)
+      .filter((bucket) =>
+        normalizedAssignments.some(
+          (assignment) =>
+            assignment.class_section === bucket.class_section &&
+            bucket[assignment.subject] != null &&
+            !Number.isNaN(bucket[assignment.subject])
+        )
+      );
+
+    const finalTeacherRankRows = [];
+    targetAverageContexts.forEach((examContext) => {
+      normalizedAssignments.forEach((assignment) => {
+        if (assignment.class_section !== examContext.class_section) return;
+
+        const average = examContext?.[assignment.subject];
+        if (average == null || Number.isNaN(average)) return;
+
+        const comparisonRows = [];
+        (teachers || []).forEach((teacher) => {
+          const teacherAssignments = assignmentsByTeacher.get(teacher.id) || [];
+          const sameClassAssignments = teacherAssignments.filter(
+            (teacherAssignment) => teacherAssignment.class_section === assignment.class_section
+          );
+          if (sameClassAssignments.length === 0) return;
+
+          const comparisonBucket = averageLookup.get(
+            buildTeacherExamIdentity({
+              school_id: teacher.school_id,
+              program: examContext.program,
+              exam_pattern: examContext.exam_pattern,
+              exam_date: examContext.exam_date,
+              class_section: assignment.class_section
+            })
+          );
+          if (!comparisonBucket) return;
+
+          sameClassAssignments.forEach((teacherAssignment) => {
+            const comparisonAverage = comparisonBucket?.[teacherAssignment.subject];
+            if (comparisonAverage == null || Number.isNaN(comparisonAverage)) return;
+
+            comparisonRows.push({
+              teacher_row_id: teacher.id,
+              teacher_id: teacher.teacher_id,
+              teacher_name: teacher.name,
+              school_id: teacher.school_id,
+              program: examContext.program,
+              exam_pattern: examContext.exam_pattern,
+              exam_date: examContext.exam_date,
+              class_section: assignment.class_section,
+              subject: teacherAssignment.subject,
+              average: comparisonAverage
+            });
+          });
+        });
+
+        finalTeacherRankRows.push({
+          teacher_row_id: targetTeacher.id,
+          teacher_id: targetTeacher.teacher_id,
+          teacher_name: targetTeacher.name,
+          school_id: effectiveSchoolId,
+          program: examContext.program,
+          exam_pattern: examContext.exam_pattern,
+          exam_date: examContext.exam_date,
+          class_section: assignment.class_section,
+          subject: assignment.subject,
+          average,
+          all_india_rank: calculateRankForAverage(comparisonRows, average)
+        });
+      });
+    });
+
+    const uniqueFinalTeacherRankRows = Array.from(
+      new Map(
+        finalTeacherRankRows.map((row) => [
+          `${row.program}|${row.exam_pattern}|${row.exam_date}|${row.class_section}|${row.subject}`,
+          row
+        ])
+      ).values()
+    ).sort((a, b) => {
+      const programCompare = a.program.localeCompare(b.program);
+      if (programCompare !== 0) return programCompare;
+      const patternCompare = a.exam_pattern.localeCompare(b.exam_pattern);
+      if (patternCompare !== 0) return patternCompare;
+      const dateCompare = a.exam_date.localeCompare(b.exam_date);
+      if (dateCompare !== 0) return dateCompare;
+      const classCompare = a.class_section.localeCompare(b.class_section);
+      if (classCompare !== 0) return classCompare;
+      return a.subject.localeCompare(b.subject);
+    });
+
+    const finalRankKeys = new Set(
+      uniqueFinalTeacherRankRows.map((row) => `${row.program}|${row.exam_pattern}|${row.exam_date}|${row.class_section}|${row.subject}`)
+    );
+    const expectedKeys = [];
+
+    targetAverageContexts.forEach((examContext) => {
+      normalizedAssignments.forEach((assignment) => {
+        if (assignment.class_section !== examContext.class_section) return;
+
+        const average = examContext?.[assignment.subject];
+        if (average == null || Number.isNaN(average)) return;
+
+        expectedKeys.push(
+          `${examContext.program}|${examContext.exam_pattern}|${examContext.exam_date}|${assignment.class_section}|${assignment.subject}`
+        );
+      });
+    });
+
+    const missingFinalKeys = expectedKeys.filter((key) => !finalRankKeys.has(key));
+
+    console.log('Teacher rank rows generated:', {
+      teacherId,
+      effectiveSchoolId,
+      totalTeachers: (teachers || []).length,
+      teacherRows: uniqueFinalTeacherRankRows.length,
+      targetAssignments: normalizedAssignments.length,
+      candidateContexts: targetAverageContexts.length,
+      missingFinalKeys,
+      sample: uniqueFinalTeacherRankRows.slice(0, 10)
+    });
+
+    return res.json({
+      success: true,
+      teacher: {
+        teacher_id: targetTeacher.teacher_id,
+        name: targetTeacher.name,
+        school_id: effectiveSchoolId
+      },
+      rows: uniqueFinalTeacherRankRows
+    });
+  } catch (err) {
+    console.error('Teacher rank fetch error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
 // ✅ POST /api/teachers/login - Direct teacher login by teacher_id
 export const loginTeacherByTeacherId = async (req, res) => {
-  const { teacher_id, password } = req.body;
+  const { teacher_id, password } = req.body ?? {};
 
   if (!teacher_id || !password) {
     return res.status(400).json({ error: "Teacher ID and password are required" });
@@ -1250,15 +1687,15 @@ export const loginTeacherByTeacherId = async (req, res) => {
 
     const teacherAssignments = Array.isArray(assignments) ? assignments : [];
 
-    // ✅ Also fetch school name for display
+    // ✅ Also fetch school details for display/report header
     const { data: school, error: schoolError } = await supabase
       .from('schools')
-      .select('school_name')
+      .select('school_name, logo_url')
       .eq('school_id', teacher.school_id)
       .single();
 
     if (schoolError) {
-      console.warn('Failed to load school name:', schoolError);
+      console.warn('Failed to load school details:', schoolError);
     }
 
     // 🚀 SUCCESS: Return full teacher + school data
@@ -1267,7 +1704,8 @@ export const loginTeacherByTeacherId = async (req, res) => {
       teacher: {
         ...teacher,
         teacher_assignments: teacherAssignments,
-        school_name: school?.school_name || "Unknown School"
+        school_name: school?.school_name || "Unknown School",
+        school_logo_url: school?.logo_url || null
       }
     });
 
