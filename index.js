@@ -107,6 +107,7 @@ app.delete('/api/classes/:id', schoolController.deleteClass);
 
 // Teachers routes
 app.post('/api/teachers', schoolController.createTeacher);
+app.delete('/api/teachers/:id', schoolController.deleteTeacher);
 app.post('/api/teachers/ranks', schoolController.getTeacherRanks);
 app.get('/api/teachers/:teacher_id/ranks', schoolController.getTeacherRanks);
 

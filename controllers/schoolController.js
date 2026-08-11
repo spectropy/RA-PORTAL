@@ -221,7 +221,19 @@ export const deleteSchool = async (req, res) => {
       console.error('Failed to delete school:', schoolDeleteError);
       return res.status(500).json({ error: 'Failed to delete school' });
     }
- 
+
+    // `school_list` is maintained separately from `schools` and does not
+    // have a foreign-key cascade, so remove its overview row explicitly.
+    const { error: schoolListDeleteError } = await supabase
+      .from('school_list')
+      .delete()
+      .eq('school_id', school_id);
+
+    if (schoolListDeleteError) {
+      console.error('Failed to delete school list entry:', schoolListDeleteError);
+      return res.status(500).json({ error: 'Failed to delete school list entry' });
+    }
+
     return res.status(200).json({
       message: `School ${school_id} and all associated data deleted successfully.`,
       school_id
@@ -315,6 +327,39 @@ export const createTeacher = async (req, res) => {
     return res.status(201).json(data);
   } catch (err) {
     console.error('Create teacher error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// ✅ DELETE /api/teachers/:id - Delete a teacher and its assignments
+export const deleteTeacher = async (req, res) => {
+  const { id } = req.params;
+
+  if (!id) {
+    return res.status(400).json({ error: 'Teacher ID is required' });
+  }
+
+  try {
+    // teacher_assignments.teacher_id uses ON DELETE CASCADE.
+    const { data, error } = await supabase
+      .from('teachers')
+      .delete()
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
+
+    if (error) {
+      console.error('Delete teacher error:', error);
+      return res.status(400).json({ error: error.message || 'Failed to delete teacher' });
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: 'Teacher not found' });
+    }
+
+    return res.json({ success: true, message: 'Teacher deleted successfully', teacher_id: id });
+  } catch (err) {
+    console.error('Delete teacher error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
