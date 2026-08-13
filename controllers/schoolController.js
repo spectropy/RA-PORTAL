@@ -933,10 +933,13 @@ export const uploadExamResults = async (req, res) => {
       return res.status(400).json({ error: 'No data found in file' });
     }
 
+    let dataStartRowNumber = 2;
+
     // Skip first row (column indices)
     if (records.length > 0) {
       console.log('Skipping first row (column indices):', records[0]);
       records = records.slice(1);
+      dataStartRowNumber += 1;
     }
 
     // Skip second row if it's a header
@@ -948,6 +951,7 @@ export const uploadExamResults = async (req, res) => {
       ) {
         console.log('Skipping header row:', headerRow);
         records = records.slice(1);
+        dataStartRowNumber += 1;
       }
     }
 
@@ -1006,6 +1010,30 @@ export const uploadExamResults = async (req, res) => {
     };
 
     // ✅ Build raw upload rows (to go into `upload` table)
+    const missingNameRows = records
+      .map((r, index) => {
+        if (!r) return null;
+
+        const mappedRow = {};
+        for (const [colIndex, key] of Object.entries(COLUMN_MAP)) {
+          mappedRow[key] = colIndex in r ? r[colIndex] : null;
+        }
+
+        const hasRowData = Object.values(r).some(
+          (value) => value != null && String(value).trim() !== '',
+        );
+        const studentName = getString(mappedRow, 'student_name');
+
+        return hasRowData && !studentName ? dataStartRowNumber + index : null;
+      })
+      .filter(Boolean);
+
+    if (missingNameRows.length > 0) {
+      return res.status(400).json({
+        error: `Upload rejected. Name is missing in column D for row(s): ${missingNameRows.join(', ')}. Please fill student names and upload again.`
+      });
+    }
+
     const uploadRows = records.map((r, index) => {
       if (!r) return null;
 
