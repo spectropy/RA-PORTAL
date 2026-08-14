@@ -9,6 +9,8 @@ import multer from 'multer';
 import authRoutes from './routes/auth.js';
 import schoolRoutes from './routes/schools.js';
 import uploadRoutes from './routes/upload.js';
+import posterTemplateRoutes from './routes/posterTemplates.js';
+import { getTopStudents } from './controllers/topStudentsController.js';
 
 // Controllers
 import * as schoolController from './controllers/schoolController.js';
@@ -95,6 +97,8 @@ app.use('/api/schools', schoolRoutes);
 
 // Upload routes (bulk school upload)
 app.use('/api/upload-schools', uploadRoutes);
+app.use('/api/poster-templates', posterTemplateRoutes);
+app.get('/api/top-students', getTopStudents);
 
 // =========================
 // 🆕 New Routes for Class/Teacher, Student, and Exam Registration
