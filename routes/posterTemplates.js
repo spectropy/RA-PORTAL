@@ -10,11 +10,12 @@ const upload = multer({
 
 router.get('/', posterTemplateController.listPosterTemplates);
 router.get('/:id', posterTemplateController.getPosterTemplate);
-router.post('/', posterTemplateController.createPosterTemplate);
+router.post('/', upload.single('file'), posterTemplateController.createPosterTemplate);
 router.put('/:id', posterTemplateController.updatePosterTemplate);
 router.post('/:id/background', upload.single('file'), posterTemplateController.uploadPosterTemplateBackground);
 router.post('/:id/thumbnail', upload.single('file'), posterTemplateController.uploadPosterTemplateThumbnail);
 router.post('/:id/duplicate', posterTemplateController.duplicatePosterTemplate);
+router.delete('/:id/permanent', posterTemplateController.permanentlyDeletePosterTemplate);
 router.delete('/:id', posterTemplateController.deletePosterTemplate);
 
 export default router;
