@@ -809,10 +809,8 @@ export const deleteExamDataset = async (req, res) => {
         p_class: context.classValue
       }),
       supabase.rpc('calculate_all_india_rank_for', {
-        p_program: context.program,
         p_exam_pattern: context.exam_pattern,
         p_class: context.classValue,
-        p_section: context.section,
         p_exam_date: context.exam_date || null
       })
     ]);
@@ -1206,10 +1204,8 @@ export const uploadExamResults = async (req, res) => {
     const { error: allIndiaRankError } = await supabase.rpc(
       'calculate_all_india_rank_for',
       {
-        p_program: program,
         p_exam_pattern: exam_pattern,
         p_class: examClass,
-        p_section: examSection,
         p_exam_date: exam_date || null
       }
     );
