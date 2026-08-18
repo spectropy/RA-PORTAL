@@ -808,7 +808,13 @@ export const deleteExamDataset = async (req, res) => {
         p_exam_pattern: context.exam_pattern,
         p_class: context.classValue
       }),
-      supabase.rpc('calculate_all_india_rank_for', { p_class: context.classValue })
+      supabase.rpc('calculate_all_india_rank_for', {
+        p_program: context.program,
+        p_exam_pattern: context.exam_pattern,
+        p_class: context.classValue,
+        p_section: context.section,
+        p_exam_date: context.exam_date || null
+      })
     ]);
 
     const recalculationErrors = recalculations.map(result => result.error?.message).filter(Boolean);
@@ -1130,14 +1136,17 @@ export const uploadExamResults = async (req, res) => {
     const analyticsWarnings = [];
 
     // ✅ STEP 1: Recalculate ranks (safe: not in a trigger)
-    const { error: rankError } = await supabase.rpc('calculate_exam_ranks', {
-  p_school_id: school_id,
-  p_program: program,
-  p_exam_pattern: exam_pattern,
-  p_class: examClass,
-  p_section: examSection,
-  p_exam_date: exam_date || null
-});
+    const { error: rankError } = await supabase.rpc(
+      'calculate_exam_ranks',
+      {
+        p_school_id: school_id,
+        p_program: program,
+        p_exam_pattern: exam_pattern,
+        p_class: examClass,
+        p_section: examSection,
+        p_exam_date: exam_date || null
+      }
+    );
     if (rankError) {
       console.warn('⚠️ Rank recalculation failed:', rankError);
       analyticsWarnings.push(`Exam ranks: ${rankError.message}`);
@@ -1194,9 +1203,16 @@ export const uploadExamResults = async (req, res) => {
     
     // ✅ STEP 6: Recalculate All India Rank
     // ✅ STEP 6: Recalculate All India Rank
-    const { error: allIndiaRankError } = await supabase.rpc('calculate_all_india_rank_for', {
-  p_class: examClass
-});
+    const { error: allIndiaRankError } = await supabase.rpc(
+      'calculate_all_india_rank_for',
+      {
+        p_program: program,
+        p_exam_pattern: exam_pattern,
+        p_class: examClass,
+        p_section: examSection,
+        p_exam_date: exam_date || null
+      }
+    );
     if (allIndiaRankError) {
     console.warn('⚠️ All India rank recalculation failed:', allIndiaRankError);
     analyticsWarnings.push(`All India ranks: ${allIndiaRankError.message}`);
