@@ -11,6 +11,7 @@ import schoolRoutes from './routes/schools.js';
 import uploadRoutes from './routes/upload.js';
 import posterTemplateRoutes from './routes/posterTemplates.js';
 import { getTopStudents } from './controllers/topStudentsController.js';
+import { getExamWiseTopStudents } from './controllers/examWiseTopStudentsController.js';
 
 // Controllers
 import * as schoolController from './controllers/schoolController.js';
@@ -99,6 +100,7 @@ app.use('/api/schools', schoolRoutes);
 app.use('/api/upload-schools', uploadRoutes);
 app.use('/api/poster-templates', posterTemplateRoutes);
 app.get('/api/top-students', getTopStudents);
+app.get('/api/top-students-exam-wise', getExamWiseTopStudents);
 
 // =========================
 // 🆕 New Routes for Class/Teacher, Student, and Exam Registration
