@@ -895,6 +895,7 @@ export const uploadExamResults = async (req, res) => {
     class: examClass,
     section: examSection,
     exam_date,
+    subject_group,
     max_marks_physics,
     max_marks_maths,
     max_marks_chemistry,
@@ -937,26 +938,41 @@ export const uploadExamResults = async (req, res) => {
       return res.status(400).json({ error: 'No data found in file' });
     }
 
+    const normalizeHeader = (value) =>
+      String(value || '')
+        .toLowerCase()
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const isHeaderText = (value) => {
+      const normalized = normalizeHeader(value);
+      return ['roll no', 'roll number', 'student id', 'name', 'student name'].includes(normalized);
+    };
+
     let dataStartRowNumber = 2;
+    let excelHeaderRow = null;
 
-    // Skip first row (column indices)
     if (records.length > 0) {
-      console.log('Skipping first row (column indices):', records[0]);
-      records = records.slice(1);
-      dataStartRowNumber += 1;
-    }
+      const firstRecord = records[0];
+      const firstRecordValues = Object.values(firstRecord || {});
+      const firstRecordKeys = Object.keys(firstRecord || {});
 
-    // Skip second row if it's a header
-    if (records.length > 0) {
-      const headerRow = records[0];
-      if (
-        (headerRow['2'] && typeof headerRow['2'] === 'string' && headerRow['2'].toLowerCase().includes('roll')) ||
-        (headerRow['3'] && typeof headerRow['3'] === 'string' && headerRow['3'].toLowerCase().includes('name'))
-      ) {
-        console.log('Skipping header row:', headerRow);
+      if (firstRecordValues.some(isHeaderText)) {
+        console.log('Detected Excel header row:', firstRecord);
+        excelHeaderRow = firstRecord;
         records = records.slice(1);
         dataStartRowNumber += 1;
+      } else if (firstRecordKeys.some(isHeaderText)) {
+        console.log('Detected CSV/object headers:', firstRecordKeys);
+        excelHeaderRow = Object.fromEntries(firstRecordKeys.map((key) => [key, key]));
       }
+    }
+
+    if (!excelHeaderRow) {
+      return res.status(400).json({
+        error: 'Upload rejected. Could not detect header row. Required headers include Roll No and Name.'
+      });
     }
 
     // ✅ 🔒 CHECK FOR DUPLICATE EXAM BEFORE PROCESSING RECORDS
@@ -982,51 +998,137 @@ export const uploadExamResults = async (req, res) => {
       });
     }
 
-    const COLUMN_MAP = {
-      2: 'student_id',
-      3: 'student_name',
-      7: 'correct',
-      8: 'wrong',
-      9: 'unattempted',
-      10: 'physics',
-      18: 'chemistry',
-      26: 'maths',
-      34: 'biology',
-    };
+    const compactHeader = (value) => normalizeHeader(value).replace(/[^a-z0-9]/g, '');
 
-    const getNumber = (row, ...keys) => {
-      for (let key of keys) {
-        if (key in row && row[key] != null && row[key] !== '') {
-          const num = parseFloat(row[key]);
-          if (!isNaN(num)) return num;
+    const hasValue = (value) => value != null && String(value).trim() !== '';
+
+    const findHeaderKey = (...aliases) => {
+      if (!excelHeaderRow) return null;
+
+      const normalizedAliases = aliases.map(normalizeHeader);
+      const compactAliases = aliases.map(compactHeader);
+
+      for (const [key, header] of Object.entries(excelHeaderRow)) {
+        const normalized = normalizeHeader(header);
+        const compacted = compactHeader(header);
+
+        if (normalizedAliases.includes(normalized) || compactAliases.includes(compacted)) {
+          return key;
         }
       }
-      return 0;
+
+      return null;
     };
 
-    const getString = (row, ...keys) => {
-      for (let key of keys) {
-        if (key in row && row[key] != null) {
-          return String(row[key]).trim();
+    const getValueByHeader = (row, ...aliases) => {
+      const headerKey = findHeaderKey(...aliases);
+      if (headerKey != null && headerKey in row && hasValue(row[headerKey])) {
+        return row[headerKey];
+      }
+      return undefined;
+    };
+
+    const getMappedValue = (row, headerAliases) => {
+      return getValueByHeader(row, ...headerAliases);
+    };
+
+    const getMappedString = (row, headerAliases) => {
+      const value = getMappedValue(row, headerAliases);
+      return value != null ? String(value).trim() : '';
+    };
+
+    const getMappedNumber = (row, headerAliases) => {
+      const value = getMappedValue(row, headerAliases);
+      const num = parseFloat(value);
+      return !isNaN(num) ? num : 0;
+    };
+
+    const getQuestionStatus = (question) => {
+      if (question.option) {
+        return question.marks > 0 ? 'Correct' : 'Incorrect';
+      }
+      return 'Not Attempted';
+    };
+
+    const buildQuestionResults = (row) => {
+      if (!excelHeaderRow) return {};
+
+      const questionResults = {};
+
+      for (const [key, header] of Object.entries(excelHeaderRow)) {
+        const match = normalizeHeader(header).match(
+          /^q\s*(\d+)\s*(options|key|marks|chapter|topic|subtopic|sub topic|blooms skill|bloom's skill|bloom skill|difficulty level|difficulty)$/,
+        );
+        if (!match) continue;
+
+        const questionKey = `Q${match[1]}`;
+        const field = match[2];
+
+        if (!questionResults[questionKey]) {
+          questionResults[questionKey] = {
+            option: '',
+            key: '',
+            marks: 0,
+            status: 'Not Attempted',
+            chapter: '',
+            topic: '',
+            subtopic: '',
+            blooms_skill: '',
+            difficulty_level: ''
+          };
+        }
+
+        if (field === 'options') {
+          questionResults[questionKey].option = row[key] != null ? String(row[key]).trim() : '';
+        } else if (field === 'key') {
+          questionResults[questionKey].key = row[key] != null ? String(row[key]).trim() : '';
+        } else if (field === 'marks') {
+          const marks = parseFloat(row[key]);
+          questionResults[questionKey].marks = !isNaN(marks) ? marks : 0;
+        } else if (field === 'chapter') {
+          questionResults[questionKey].chapter = row[key] != null ? String(row[key]).trim() : '';
+        } else if (field === 'topic') {
+          questionResults[questionKey].topic = row[key] != null ? String(row[key]).trim() : '';
+        } else if (field === 'subtopic' || field === 'sub topic') {
+          questionResults[questionKey].subtopic = row[key] != null ? String(row[key]).trim() : '';
+        } else if (field === 'blooms skill' || field === "bloom's skill" || field === 'bloom skill') {
+          questionResults[questionKey].blooms_skill = row[key] != null ? String(row[key]).trim() : '';
+        } else if (field === 'difficulty level' || field === 'difficulty') {
+          questionResults[questionKey].difficulty_level = row[key] != null ? String(row[key]).trim() : '';
         }
       }
-      return '';
+
+      Object.values(questionResults).forEach((question) => {
+        question.status = getQuestionStatus(question);
+      });
+
+      return questionResults;
     };
+
+    const inferSubjectGroup = () => {
+      const requestedGroup = String(subject_group || '').trim().toUpperCase();
+      if (['PCM', 'PCB', 'PCMB'].includes(requestedGroup)) return requestedGroup;
+
+      const hasMaths = !!findHeaderKey('MATHS', 'MATH');
+      const hasBiology = !!findHeaderKey('BIOLOGY', 'BIO');
+
+      if (hasMaths && hasBiology) return 'PCMB';
+      if (hasMaths) return 'PCM';
+      if (hasBiology) return 'PCB';
+      return null;
+    };
+
+    const resolvedSubjectGroup = inferSubjectGroup();
 
     // ✅ Build raw upload rows (to go into `upload` table)
     const missingNameRows = records
       .map((r, index) => {
         if (!r) return null;
 
-        const mappedRow = {};
-        for (const [colIndex, key] of Object.entries(COLUMN_MAP)) {
-          mappedRow[key] = colIndex in r ? r[colIndex] : null;
-        }
-
         const hasRowData = Object.values(r).some(
           (value) => value != null && String(value).trim() !== '',
         );
-        const studentName = getString(mappedRow, 'student_name');
+        const studentName = getMappedString(r, ['Name', 'Student Name']);
 
         return hasRowData && !studentName ? dataStartRowNumber + index : null;
       })
@@ -1041,36 +1143,59 @@ export const uploadExamResults = async (req, res) => {
     const uploadRows = records.map((r, index) => {
       if (!r) return null;
 
-      const mappedRow = {};
-      for (const [colIndex, key] of Object.entries(COLUMN_MAP)) {
-        mappedRow[key] = colIndex in r ? r[colIndex] : null;
-      }
-
-      const studentId = getString(mappedRow, 'student_id');
+      const studentId = getMappedString(r, ['Roll No', 'Roll Number', 'Student ID']);
       if (!studentId || studentId.trim() === '') {
         console.warn(`Skipping invalid row ${index + 1}: student_id is empty`);
         return null;
       }
-      const studentName = getString(mappedRow, 'student_name');
-      const physics = getNumber(mappedRow, 'physics');
-      const chemistry = getNumber(mappedRow, 'chemistry');
-      const maths = getNumber(mappedRow, 'maths');
-      const biology = getNumber(mappedRow, 'biology');
-      const correct = getNumber(mappedRow, 'correct');
-      const wrong = getNumber(mappedRow, 'wrong');
-      const unattempted = getNumber(mappedRow, 'unattempted');
+      const studentName = getMappedString(r, ['Name', 'Student Name']);
+      const physics = getMappedNumber(r, ['PHYSICS', 'Physics']);
+      const chemistry = getMappedNumber(r, ['CHEMISTRY', 'Chemistry']);
+      const maths = resolvedSubjectGroup === 'PCB'
+        ? 0
+        : getMappedNumber(r, ['MATHS', 'MATH', 'Maths']);
+      const biology = resolvedSubjectGroup === 'PCM'
+        ? 0
+        : getMappedNumber(r, ['BIOLOGY', 'BIO', 'Biology']);
+      const correct = getMappedNumber(r, ['Correct Answers']);
+      const wrong = getMappedNumber(r, ['Incorrect Answers', 'Wrong Answers']);
+      const unattempted = getMappedNumber(r, ['Not attempted', 'Not Attempted', 'Unattempted']);
+      const physicsCorrect = getMappedNumber(r, ['PHYSICS Correct Answers', 'PHYSICS _Correct Answers']);
+      const physicsIncorrect = getMappedNumber(r, ['PHYSICS Incorrect Answers', 'PHYSICS _Incorrect Answers']);
+      const physicsNotAttempted = getMappedNumber(r, ['PHYSICS Not attempted', 'PHYSICS _Not attempted']);
+      const chemistryCorrect = getMappedNumber(r, ['CHEMISTRY Correct Answers', 'CHEMISTRY _Correct Answers']);
+      const chemistryIncorrect = getMappedNumber(r, ['CHEMISTRY Incorrect Answers', 'CHEMISTRY _Incorrect Answers']);
+      const chemistryNotAttempted = getMappedNumber(r, ['CHEMISTRY Not attempted', 'CHEMISTRY _Not attempted']);
+      const mathsCorrect = resolvedSubjectGroup === 'PCB'
+        ? 0
+        : getMappedNumber(r, ['MATHS Correct Answers', 'MATHS _Correct Answers', 'MATH Correct Answers']);
+      const mathsIncorrect = resolvedSubjectGroup === 'PCB'
+        ? 0
+        : getMappedNumber(r, ['MATHS Incorrect Answers', 'MATHS _Incorrect Answers', 'MATH Incorrect Answers']);
+      const mathsNotAttempted = resolvedSubjectGroup === 'PCB'
+        ? 0
+        : getMappedNumber(r, ['MATHS Not attempted', 'MATHS _Not attempted', 'MATH Not attempted']);
+      const biologyCorrect = resolvedSubjectGroup === 'PCM'
+        ? 0
+        : getMappedNumber(r, ['BIOLOGY Correct Answers', 'BIOLOGY _Correct Answers', 'BIO Correct Answers']);
+      const biologyIncorrect = resolvedSubjectGroup === 'PCM'
+        ? 0
+        : getMappedNumber(r, ['BIOLOGY Incorrect Answers', 'BIOLOGY _Incorrect Answers', 'BIO Incorrect Answers']);
+      const biologyNotAttempted = resolvedSubjectGroup === 'PCM'
+        ? 0
+        : getMappedNumber(r, ['BIOLOGY Not attempted', 'BIOLOGY _Not attempted', 'BIO Not attempted']);
+      const questionResults = buildQuestionResults(r);
 
       const nameParts = studentName.split(' ');
       const firstName = nameParts[0] || '';
       const lastName = nameParts.slice(1).join(' ') || '';
 
       const totalMarks = physics + chemistry + maths + biology;
-      const maxPhysics = parseInt(max_marks_physics);
-      const maxChemistry = parseInt(max_marks_chemistry);
-      const maxMaths = parseInt(max_marks_maths);
-      const maxBiology = parseInt(max_marks_biology);
+      const maxPhysics = parseInt(max_marks_physics) || 50;
+      const maxChemistry = parseInt(max_marks_chemistry) || 50;
+      const maxMaths = resolvedSubjectGroup === 'PCB' ? 0 : parseInt(max_marks_maths) || 50;
+      const maxBiology = resolvedSubjectGroup === 'PCM' ? 0 : parseInt(max_marks_biology) || 0;
       const total_max_marks = maxPhysics + maxChemistry + maxMaths + maxBiology;
-      const totalQuestions = 60;
       const percentage = total_max_marks > 0 ? parseFloat(((totalMarks / total_max_marks) * 100).toFixed(2)) : 0;
 
       // ⚠️ This object will be stored as JSONB in `upload.data`
@@ -1081,10 +1206,11 @@ export const uploadExamResults = async (req, res) => {
         class: examClass,
         section: examSection,
         exam_date: exam_date || null,
-        max_marks_physics: parseInt(max_marks_physics) || 50,
-        max_marks_maths: parseInt(max_marks_maths) || 50,
-        max_marks_chemistry: parseInt(max_marks_chemistry) || 50,
-        max_marks_biology: parseInt(max_marks_biology) || 0,
+        subject_group: resolvedSubjectGroup,
+        max_marks_physics: maxPhysics,
+        max_marks_maths: maxMaths,
+        max_marks_chemistry: maxChemistry,
+        max_marks_biology: maxBiology,
 
         // Student data from Excel
         student_id: studentId,
@@ -1094,10 +1220,23 @@ export const uploadExamResults = async (req, res) => {
         correct_answers: correct,
         wrong_answers: wrong,
         unattempted: unattempted,
+        physics_correct_answers: physicsCorrect,
+        physics_incorrect_answers: physicsIncorrect,
+        physics_not_attempted: physicsNotAttempted,
+        chemistry_correct_answers: chemistryCorrect,
+        chemistry_incorrect_answers: chemistryIncorrect,
+        chemistry_not_attempted: chemistryNotAttempted,
+        maths_correct_answers: mathsCorrect,
+        maths_incorrect_answers: mathsIncorrect,
+        maths_not_attempted: mathsNotAttempted,
+        biology_correct_answers: biologyCorrect,
+        biology_incorrect_answers: biologyIncorrect,
+        biology_not_attempted: biologyNotAttempted,
         physics_marks: physics,
         chemistry_marks: chemistry,
         maths_marks: maths,
         biology_marks: biology,
+        question_results: questionResults,
         total_marks: totalMarks,
         percentage: parseFloat(percentage),
         // Note: ranks will be filled later by trigger/function
@@ -1214,7 +1353,6 @@ export const uploadExamResults = async (req, res) => {
     analyticsWarnings.push(`All India ranks: ${allIndiaRankError.message}`);
     }
 
-    // ✅ STEP 7: Fetch results (now with real ranks and averages if recalc succeeded)
     // ✅ STEP 7: Fetch results (now with real ranks and averages if recalc succeeded)
     const { data: results, error: fetchError } = await supabase
       .from('exams')
@@ -1890,6 +2028,7 @@ export const getStudentExamResults = async (req, res) => {
         class,
         section,
         exam_date,
+        subject_group,
         max_marks_physics,
         max_marks_chemistry,
         max_marks_maths,
@@ -1901,7 +2040,20 @@ export const getStudentExamResults = async (req, res) => {
         section,
         correct_answers,
         wrong_answers,
-        unattempted
+        unattempted,
+        physics_correct_answers,
+        physics_incorrect_answers,
+        physics_not_attempted,
+        chemistry_correct_answers,
+        chemistry_incorrect_answers,
+        chemistry_not_attempted,
+        maths_correct_answers,
+        maths_incorrect_answers,
+        maths_not_attempted,
+        biology_correct_answers,
+        biology_incorrect_answers,
+        biology_not_attempted,
+        question_results
       `)
       .eq('student_id', student_id)
       .order('created_at', { ascending: false });
@@ -1919,6 +2071,7 @@ export const getStudentExamResults = async (req, res) => {
   exam: r.exam_pattern || 'N/A',
   exam_pattern: r.exam_pattern || 'N/A',  // 👈 FOR GROUPING LOGIC (critical!)
   program: r.program || 'N/A',
+  subject_group: r.subject_group || null,
   physics_marks: parseFloat(r.physics_marks) || 0,
   chemistry_marks: parseFloat(r.chemistry_marks) || 0,
   maths_marks: parseFloat(r.maths_marks) || 0,
@@ -1940,7 +2093,20 @@ export const getStudentExamResults = async (req, res) => {
   section: r.section || '-',
   correct_answers: r.correct_answers,
   wrong_answers: r.wrong_answers,
-  unattempted: r.unattempted
+  unattempted: r.unattempted,
+  physics_correct_answers: r.physics_correct_answers,
+  physics_incorrect_answers: r.physics_incorrect_answers,
+  physics_not_attempted: r.physics_not_attempted,
+  chemistry_correct_answers: r.chemistry_correct_answers,
+  chemistry_incorrect_answers: r.chemistry_incorrect_answers,
+  chemistry_not_attempted: r.chemistry_not_attempted,
+  maths_correct_answers: r.maths_correct_answers,
+  maths_incorrect_answers: r.maths_incorrect_answers,
+  maths_not_attempted: r.maths_not_attempted,
+  biology_correct_answers: r.biology_correct_answers,
+  biology_incorrect_answers: r.biology_incorrect_answers,
+  biology_not_attempted: r.biology_not_attempted,
+  question_results: r.question_results || null
 }));
 
     return res.json(formatted);
