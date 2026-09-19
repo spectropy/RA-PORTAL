@@ -860,7 +860,8 @@ export const getPrograms = (req, res) => {
     { id: 'FF', name: 'FF' },
     { id: 'CAT', name: 'CAT' },
     { id: 'SPARK', name: 'SPARK' },
-    { id: 'MANAIR_MAESTRO', name: 'MANAIR_MAESTRO' }
+    { id: 'MANAIR_MAESTRO', name: 'MANAIR_MAESTRO' },
+    { id: 'JEE MAIN', name: 'JEE MAIN' }
   ];
   res.json(PROGRAMS);
 };
