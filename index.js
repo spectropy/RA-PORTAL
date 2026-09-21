@@ -140,6 +140,7 @@ app.get('/api/schools/:school_id', schoolController.getSchoolById);
 app.get('/api/exams', schoolController.getExams);
 app.get('/api/schools/:school_id/exam-datasets', schoolController.getExamDatasets);
 app.get('/api/schools/:school_id/exam-datasets/results', schoolController.getExamDatasetResults);
+app.get('/api/schools/:school_id/exam-datasets/question-peer-statistics', schoolController.getExamQuestionPeerStatistics);
 app.delete('/api/schools/:school_id/exam-datasets', schoolController.deleteExamDataset);
 // Exams creation
 app.post('/api/exams', schoolController.createExam);

@@ -763,6 +763,102 @@ export const getExamDatasetResults = async (req, res) => {
   }
 };
 
+const parseStoredQuestionResults = value => {
+  if (!value) return {};
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof value === 'object' && !Array.isArray(value) ? value : {};
+};
+
+const getStoredQuestionStatus = details => {
+  const value = details && typeof details === 'object' ? details : {};
+  const status = String(value.status || '').trim().toLowerCase();
+  const option = String(value.option ?? value.options ?? '').trim();
+  const answerKey = String(value.key ?? '').trim();
+  const marks = Number(value.marks);
+
+  if (status.includes('incorrect')) return 'incorrect';
+  if (status.includes('correct')) return 'correct';
+  if (status.includes('not') || status.includes('unattempted') || !option) {
+    return 'unattempted';
+  }
+  if (Number.isFinite(marks) && marks > 0) return 'correct';
+  if (answerKey && option.toUpperCase() === answerKey.toUpperCase()) return 'correct';
+  return 'incorrect';
+};
+
+// Return privacy-safe, per-question aggregates for the other students in an exam cohort.
+export const getExamQuestionPeerStatistics = async (req, res) => {
+  const context = getExamDatasetContext(req);
+  const missing = validateExamDatasetContext(context);
+  if (missing.length) {
+    return res.status(400).json({ error: `Missing or invalid parameters: ${missing.join(', ')}` });
+  }
+
+  const excludedStudentId = String(req.query.exclude_student_id || '').trim();
+  if (!excludedStudentId) {
+    return res.status(400).json({ error: 'exclude_student_id is required' });
+  }
+
+  try {
+    const peerResults = await fetchAllExams(
+      query => applyExamDatasetFilters(query, context)
+        .neq('student_id', excludedStudentId),
+      'student_id, question_results'
+    );
+    const questionBuckets = new Map();
+
+    peerResults.forEach(result => {
+      const questions = parseStoredQuestionResults(result.question_results);
+      Object.entries(questions).forEach(([question, details]) => {
+        const questionKey = String(question || '').trim();
+        if (!questionKey) return;
+
+        if (!questionBuckets.has(questionKey)) {
+          questionBuckets.set(questionKey, {
+            question: questionKey,
+            correct_count: 0,
+            peer_count: 0
+          });
+        }
+
+        const bucket = questionBuckets.get(questionKey);
+        bucket.peer_count += 1;
+        if (getStoredQuestionStatus(details) === 'correct') {
+          bucket.correct_count += 1;
+        }
+      });
+    });
+
+    const questions = Array.from(questionBuckets.values())
+      .map(item => ({
+        ...item,
+        correct_percentage: item.peer_count > 0
+          ? Number(((item.correct_count / item.peer_count) * 100).toFixed(1))
+          : null
+      }))
+      .sort((a, b) => {
+        const first = Number(a.question.match(/\d+/)?.[0] || 0);
+        const second = Number(b.question.match(/\d+/)?.[0] || 0);
+        return first - second || a.question.localeCompare(b.question);
+      });
+
+    return res.status(200).json({
+      peer_student_count: new Set(peerResults.map(row => row.student_id).filter(Boolean)).size,
+      questions
+    });
+  } catch (error) {
+    console.error('Get exam question peer statistics error:', error);
+    return res.status(500).json({ error: 'Failed to load question peer statistics' });
+  }
+};
+
 export const deleteExamDataset = async (req, res) => {
   const context = getExamDatasetContext(req);
   const missing = validateExamDatasetContext(context);
