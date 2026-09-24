@@ -887,6 +887,15 @@ export const deleteExamDataset = async (req, res) => {
         exam_date: context.exam_date
       });
 
+    const { error: examAverageError } = await supabase.rpc('calculate_exam_averages_for', {
+      p_school_id: context.school_id,
+      p_program: context.program,
+      p_exam_pattern: context.exam_pattern,
+      p_class: context.classValue,
+      p_section: context.section,
+      p_exam_date: context.exam_date
+    });
+
     const recalculations = await Promise.all([
       supabase.rpc('calculate_grade_averages_for', {
         p_school_id: context.school_id,
@@ -909,10 +918,16 @@ export const deleteExamDataset = async (req, res) => {
       supabase.rpc('recalculate_all_india_ranks_for', {
         p_exam_pattern: context.exam_pattern,
         p_class: context.classValue
+      }),
+      supabase.rpc('recalculate_batch_grade_ranks_for', {
+        p_exam_pattern: context.exam_pattern,
+        p_class: context.classValue
       })
     ]);
 
-    const recalculationErrors = recalculations.map(result => result.error?.message).filter(Boolean);
+    const recalculationErrors = [examAverageError, ...recalculations.map(result => result.error)]
+      .map(error => error?.message)
+      .filter(Boolean);
     if (rawDeleteError || recalculationErrors.length) {
       console.warn('Exam deleted with cleanup warnings:', {
         rawUpload: rawDeleteError?.message,
@@ -1411,6 +1426,15 @@ export const uploadExamResults = async (req, res) => {
     if (gradeAvgError) {
       console.warn('⚠️ Grade averages recalculation failed:', gradeAvgError);
       analyticsWarnings.push(`Grade averages: ${gradeAvgError.message}`);
+    }
+
+    const { error: batchRankError } = await supabase.rpc('recalculate_batch_grade_ranks_for', {
+      p_exam_pattern: exam_pattern,
+      p_class: examClass
+    });
+    if (batchRankError) {
+      console.warn('Batch rank recalculation failed:', batchRankError);
+      analyticsWarnings.push(`Batch ranks: ${batchRankError.message}`);
     }
 
     // ✅ STEP 4: Recalculate cumulative percentages for the class-section

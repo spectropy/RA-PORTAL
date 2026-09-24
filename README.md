@@ -312,9 +312,12 @@ The main calculation functions update exam ranks, exam averages, grade averages,
 - Class rank compares percentages within the same school, program, exam pattern, class, and section. Exam date is not part of the cohort.
 - School rank compares percentages within the same school, program, exam pattern, and class, across sections. Exam date is not part of the cohort.
 - All India rank compares percentages across schools, programs, and sections for the same exam pattern and class. Exam date is not part of the cohort.
+- Batch school rank compares batch averages within the same school, program, exam pattern, and class, across sections and exam dates. Batch All India rank compares batch averages across schools and programs for the same exam pattern and class, across dates.
 - Tied percentages receive the same competition rank (for example, `1, 2, 2, 4`).
 
-The migration recalculates existing rank values and defines the functions used after future uploads and deletions. Apply it before deploying backend code that calls `recalculate_class_school_ranks_for` and `recalculate_all_india_ranks_for`.
+Batch ranks are stored in `school_grade_rank` and `all_schools_grade_rank`, calculated from `total_exam_per_avg` by `recalculate_batch_grade_ranks_for`.
+
+The migration recalculates existing rank values and defines the functions used after future uploads and deletions. Apply it before deploying backend code that calls `recalculate_class_school_ranks_for`, `recalculate_all_india_ranks_for`, and `recalculate_batch_grade_ranks_for`.
 
 When deleting an exam dataset, delete matching rows from both `exams` and `upload`, then recalculate the affected analytics. The existing delete endpoint follows this process.
 
