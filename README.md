@@ -307,7 +307,14 @@ Exam uploads have two database records involved:
 3. The trigger converts the JSON values into typed columns in `exams`.
 4. The backend calls calculation functions to update ranks, exam averages, grade averages, cumulative percentages, and all-school ranks.
 
-The main calculation functions are `calculate_exam_ranks`, `calculate_exam_averages_for`, `calculate_grade_averages_for`, `calculate_cumulative_percentages_for`, `calculate_grade_ranks_for`, and `calculate_all_india_rank_for`.
+The main calculation functions update exam ranks, exam averages, grade averages, cumulative percentages, and all-school ranks. Rank recalculation is defined in `supabase/migrations/202609240001_rank_scopes.sql`:
+
+- Class rank compares percentages within the same school, program, exam pattern, class, and section. Exam date is not part of the cohort.
+- School rank compares percentages within the same school, program, exam pattern, and class, across sections. Exam date is not part of the cohort.
+- All India rank compares percentages across schools, programs, and sections for the same exam pattern and class. Exam date is not part of the cohort.
+- Tied percentages receive the same competition rank (for example, `1, 2, 2, 4`).
+
+The migration recalculates existing rank values and defines the functions used after future uploads and deletions. Apply it before deploying backend code that calls `recalculate_class_school_ranks_for` and `recalculate_all_india_ranks_for`.
 
 When deleting an exam dataset, delete matching rows from both `exams` and `upload`, then recalculate the affected analytics. The existing delete endpoint follows this process.
 

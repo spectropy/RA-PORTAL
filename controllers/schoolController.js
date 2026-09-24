@@ -899,15 +899,16 @@ export const deleteExamDataset = async (req, res) => {
         p_class: context.classValue,
         p_section: context.section
       }),
-      supabase.rpc('calculate_grade_ranks_for', {
+      supabase.rpc('recalculate_class_school_ranks_for', {
+        p_school_id: context.school_id,
         p_program: context.program,
         p_exam_pattern: context.exam_pattern,
-        p_class: context.classValue
-      }),
-      supabase.rpc('calculate_all_india_rank_for', {
-        p_exam_pattern: context.exam_pattern,
         p_class: context.classValue,
-        p_exam_date: context.exam_date || null
+        p_section: context.section
+      }),
+      supabase.rpc('recalculate_all_india_ranks_for', {
+        p_exam_pattern: context.exam_pattern,
+        p_class: context.classValue
       })
     ]);
 
@@ -1369,16 +1370,15 @@ export const uploadExamResults = async (req, res) => {
 
     const analyticsWarnings = [];
 
-    // ✅ STEP 1: Recalculate ranks (safe: not in a trigger)
+    // ✅ STEP 1: Recalculate class and school ranks across the agreed cohorts.
     const { error: rankError } = await supabase.rpc(
-      'calculate_exam_ranks',
+      'recalculate_class_school_ranks_for',
       {
         p_school_id: school_id,
         p_program: program,
         p_exam_pattern: exam_pattern,
         p_class: examClass,
-        p_section: examSection,
-        p_exam_date: exam_date || null
+        p_section: examSection
       }
     );
     if (rankError) {
@@ -1424,25 +1424,12 @@ export const uploadExamResults = async (req, res) => {
       analyticsWarnings.push(`Cumulative percentages: ${cumulativeError.message}`);
     }
 
-    // ✅ STEP 5: Recalculate grade ranks
-    const { error: gradeRankError } = await supabase.rpc('calculate_grade_ranks_for', {
-  p_program: program,
-  p_exam_pattern: exam_pattern,
-  p_class: examClass
-});
-    if (gradeRankError) {
-      console.warn('⚠️ Grade rank recalculation failed:', gradeRankError);
-      analyticsWarnings.push(`Grade ranks: ${gradeRankError.message}`);
-    }
-    
-    // ✅ STEP 6: Recalculate All India Rank
-    // ✅ STEP 6: Recalculate All India Rank
+    // ✅ STEP 5: Recalculate All India Rank across matching exam patterns and classes.
     const { error: allIndiaRankError } = await supabase.rpc(
-      'calculate_all_india_rank_for',
+      'recalculate_all_india_ranks_for',
       {
         p_exam_pattern: exam_pattern,
-        p_class: examClass,
-        p_exam_date: exam_date || null
+        p_class: examClass
       }
     );
     if (allIndiaRankError) {
