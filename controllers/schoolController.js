@@ -2680,6 +2680,9 @@ const buildTeacherAverageLookup = exams => {
 const calculateRankForAverage = (rows, average) =>
   rows.filter(row => row.average > average).length + 1;
 
+const calculateDenseRankForAverage = (rows, average) =>
+  new Set(rows.filter(row => row.average > average).map(row => row.average)).size + 1;
+
 // Return the teacher's subject averages and rank for every matching exam context.
 export const getTeacherRanks = async (req, res) => {
   const teacherId = String(req.params.teacher_id || req.body?.teacher_id || '').trim().toUpperCase();
@@ -2772,15 +2775,16 @@ export const getTeacherRanks = async (req, res) => {
           );
           if (!matchingAssignment) return;
 
-          const comparison = averageLookup.get(buildTeacherExamIdentity({
-            school_id: teacher.school_id,
-            program: context.program,
-            exam_pattern: context.exam_pattern,
-            exam_date: context.exam_date,
-            class_section: assignment.class_section
-          }));
-          const comparisonAverage = comparison?.[assignment.subject];
-          if (Number.isFinite(comparisonAverage)) comparisonRows.push({ average: comparisonAverage });
+          averageLookup.forEach(comparison => {
+            if (
+              comparison.school_id !== teacher.school_id ||
+              comparison.exam_pattern !== context.exam_pattern ||
+              comparison.class_section !== assignment.class_section
+            ) return;
+
+            const comparisonAverage = comparison[assignment.subject];
+            if (Number.isFinite(comparisonAverage)) comparisonRows.push({ average: comparisonAverage });
+          });
         });
 
         rows.push({
@@ -2793,7 +2797,7 @@ export const getTeacherRanks = async (req, res) => {
           class_section: assignment.class_section,
           subject: assignment.subject,
           average,
-          all_india_rank: calculateRankForAverage(comparisonRows, average)
+          all_india_rank: calculateDenseRankForAverage(comparisonRows, average)
         });
       }
     }
