@@ -10,6 +10,7 @@ import authRoutes from './routes/auth.js';
 import schoolRoutes from './routes/schools.js';
 import uploadRoutes from './routes/upload.js';
 import posterTemplateRoutes from './routes/posterTemplates.js';
+import studentPhotoRoutes from './routes/studentPhotos.js';
 import { getTopStudents } from './controllers/topStudentsController.js';
 import { getExamWiseTopStudents } from './controllers/examWiseTopStudentsController.js';
 
@@ -99,6 +100,7 @@ app.use('/api/schools', schoolRoutes);
 // Upload routes (bulk school upload)
 app.use('/api/upload-schools', uploadRoutes);
 app.use('/api/poster-templates', posterTemplateRoutes);
+app.use('/api/student-photos', studentPhotoRoutes);
 app.get('/api/top-students', getTopStudents);
 app.get('/api/top-students-exam-wise', getExamWiseTopStudents);
 
