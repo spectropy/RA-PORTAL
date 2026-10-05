@@ -1170,7 +1170,7 @@ export const uploadExamResults = async (req, res) => {
 
       for (const [key, header] of Object.entries(excelHeaderRow)) {
         const match = normalizeHeader(header).match(
-          /^q\s*(\d+)\s*(options|key|marks|chapter|topic|subtopic|sub topic|blooms skill|bloom's skill|bloom skill|difficulty level|difficulty)$/,
+          /^q\s*(\d+)\s*(options|key|marks|subject|chapter|topic|subtopic|sub topic|blooms skill|bloom's skill|bloom skill|difficulty level|difficulty)$/,
         );
         if (!match) continue;
 
@@ -1183,6 +1183,7 @@ export const uploadExamResults = async (req, res) => {
             key: '',
             marks: 0,
             status: 'Not Attempted',
+            subject: '',
             chapter: '',
             topic: '',
             subtopic: '',
@@ -1198,6 +1199,8 @@ export const uploadExamResults = async (req, res) => {
         } else if (field === 'marks') {
           const marks = parseFloat(row[key]);
           questionResults[questionKey].marks = !isNaN(marks) ? marks : 0;
+        } else if (field === 'subject') {
+          questionResults[questionKey].subject = row[key] != null ? String(row[key]).trim() : '';
         } else if (field === 'chapter') {
           questionResults[questionKey].chapter = row[key] != null ? String(row[key]).trim() : '';
         } else if (field === 'topic') {
