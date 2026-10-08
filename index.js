@@ -150,6 +150,7 @@ app.post('/api/exams/:exam_id/results/upload', upload.single('file'), schoolCont
 app.get('/api/exams/results', schoolController.getStudentExamResults);
 app.put('/api/schools/:school_id/logo', schoolController.updateSchoolLogo);
 app.get('/api/queries/dashboard', schoolController.getDashboardData); 
+app.get('/api/queries/:type/filters', schoolController.getQueriesPerformanceFilters);
 app.get('/api/queries/schools/list', schoolController.getSchoolQueriesListData);
 app.get('/api/queries/teachers/list', schoolController.getTeacherQueriesListData);
 app.get('/api/queries/teachers', schoolController.getTeacherQueriesData);

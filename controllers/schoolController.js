@@ -49,6 +49,23 @@ export const getSchools = async (req, res) => {
     return res.status(500).json({ error: 'Failed to fetch schools' });
   }
 };
+
+// Lightweight school list for CSM selection.
+export const getCsmSchoolSelectorList = async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('school_list')
+      .select('school_id, school_name')
+      .order('school_name', { ascending: true });
+
+    if (error) throw error;
+
+    return res.json({ data });
+  } catch (err) {
+    console.error('GET /api/schools/csm-selector error:', err);
+    return res.status(500).json({ error: 'Failed to fetch schools' });
+  }
+};
  
 // ✅ POST /api/schools - Create new school
 export const createSchool = async (req, res) => {
@@ -2499,7 +2516,7 @@ export const getDashboardData = async (req, res) => {
 
       for (const row of data) {
         if (row.school_id) schoolIds.add(row.school_id);
-        if (row.class && row.section) classKeys.add(`${row.class}-${row.section}`);
+        if (row.class) classKeys.add(row.class);
         if (row.student_id) studentIds.add(row.student_id); // ← add
       }
 
@@ -2524,7 +2541,7 @@ export const getDashboardData = async (req, res) => {
           };
         }
         if (row.school_id) patternMap[pattern].schoolIds.add(row.school_id);
-        if (row.class && row.section) patternMap[pattern].classKeys.add(`${row.class}-${row.section}`);
+        if (row.class) patternMap[pattern].classKeys.add(row.class);
         if (row.student_id) patternMap[pattern].studentIds.add(row.student_id); // ← same logic
       }
 
@@ -2549,13 +2566,13 @@ export const getDashboardData = async (req, res) => {
   }
 };
 
-// GET /api/queries/schools/list?program=...&school=...&class_section=...&exam=...
+// GET /api/queries/schools/list?program=...&school=...&class=...&exam=...
 export const getSchoolQueriesListData = async (req, res) => {
-  const { program, school, class_section, exam } = req.query;
+  const { program, school, exam } = req.query;
+  const selectedClass = String(req.query.class || '').trim();
 
   const selectedProgram = String(program || '').trim();
   const selectedSchool = String(school || '').trim();
-  const selectedClassSection = String(class_section || '').trim();
   const selectedExam = String(exam || '').trim();
 
   try {
@@ -2576,14 +2593,27 @@ export const getSchoolQueriesListData = async (req, res) => {
       `
     );
 
+    const schoolIds = [...new Set(exams.map((row) => row.school_id).filter(Boolean))];
+    let schoolNameById = new Map();
+    if (schoolIds.length) {
+      const schoolsRes = await supabase
+        .from('schools')
+        .select('school_id, school_name')
+        .in('school_id', schoolIds);
+      if (schoolsRes.error) throw schoolsRes.error;
+      schoolNameById = new Map(
+        (schoolsRes.data || []).map((row) => [row.school_id, row.school_name])
+      );
+    }
+
     const buckets = new Map();
     exams.forEach((row) => {
-      const classSection = [row.class, row.section].filter(Boolean).join('-');
+      const className = row.class || '';
 
       const key = [
         row.program || '',
         row.school_id || '',
-        classSection,
+        className,
         row.exam_pattern || '',
       ].join('|');
 
@@ -2591,7 +2621,8 @@ export const getSchoolQueriesListData = async (req, res) => {
         buckets.set(key, {
           program: row.program || '',
           school: row.school_id || '',
-          class_section: classSection,
+          school_name: schoolNameById.get(row.school_id) || '',
+          class: className,
           exam: row.exam_pattern || '',
           students: new Set(),
           percentageSum: 0,
@@ -2613,7 +2644,8 @@ export const getSchoolQueriesListData = async (req, res) => {
     const rows = [...buckets.values()].map((bucket) => ({
       program: bucket.program,
       school: bucket.school,
-      class_section: bucket.class_section,
+      school_name: bucket.school_name,
+      class: bucket.class,
       exam: bucket.exam,
       total_students: bucket.students.size,
       average_percent: bucket.percentageCount
@@ -2624,31 +2656,45 @@ export const getSchoolQueriesListData = async (req, res) => {
     const rankValue = (value) =>
       value === null || value === undefined ? -Infinity : Number(value);
 
+    const schoolRankGroups = new Map();
+    const allIndiaRankGroups = new Map();
+
     rows.forEach((row) => {
-      const schoolPeers = rows.filter(
-        (peer) => peer.school === row.school && peer.exam === row.exam
-      );
-      const allIndiaPeers = rows.filter(
-        (peer) => peer.exam === row.exam && peer.class_section === row.class_section
+      const schoolRankKey = `${row.school || ''}|${row.exam || ''}`;
+      const allIndiaRankKey = `${row.exam || ''}|${row.class || ''}`;
+
+      if (!schoolRankGroups.has(schoolRankKey)) schoolRankGroups.set(schoolRankKey, []);
+      if (!allIndiaRankGroups.has(allIndiaRankKey)) allIndiaRankGroups.set(allIndiaRankKey, []);
+
+      schoolRankGroups.get(schoolRankKey).push(row);
+      allIndiaRankGroups.get(allIndiaRankKey).push(row);
+    });
+
+    const applyDenseAverageRank = (group, rankField) => {
+      const rankedAverages = [
+        ...new Set(
+          group
+            .map((row) => rankValue(row.average_percent))
+            .filter((value) => value !== -Infinity)
+        ),
+      ].sort((a, b) => b - a);
+
+      const rankByAverage = new Map(
+        rankedAverages.map((average, index) => [average, index + 1])
       );
 
-      row.school_rank =
-        new Set(
-          schoolPeers
-            .filter((peer) => rankValue(peer.average_percent) > rankValue(row.average_percent))
-            .map((peer) => peer.average_percent)
-        ).size + 1;
-      row.all_india_rank =
-        new Set(
-          allIndiaPeers
-            .filter((peer) => rankValue(peer.average_percent) > rankValue(row.average_percent))
-            .map((peer) => peer.average_percent)
-        ).size + 1;
-    });
+      group.forEach((row) => {
+        const average = rankValue(row.average_percent);
+        row[rankField] = rankByAverage.get(average) || null;
+      });
+    };
+
+    schoolRankGroups.forEach((group) => applyDenseAverageRank(group, 'school_rank'));
+    allIndiaRankGroups.forEach((group) => applyDenseAverageRank(group, 'all_india_rank'));
 
     const visibleRows = rows.filter((row) => {
       if (selectedSchool && row.school !== selectedSchool) return false;
-      if (selectedClassSection && row.class_section !== selectedClassSection) return false;
+      if (selectedClass && row.class !== selectedClass) return false;
       return true;
     });
 
@@ -2661,26 +2707,85 @@ export const getSchoolQueriesListData = async (req, res) => {
       if (schoolRankCompare !== 0) return schoolRankCompare;
       return (
         a.school.localeCompare(b.school) ||
-        a.class_section.localeCompare(b.class_section) ||
+        a.class.localeCompare(b.class) ||
         a.exam.localeCompare(b.exam)
       );
     });
 
     return res.json({
-      programs: [...new Set(exams.map((row) => row.program).filter(Boolean).map((value) => value.trim()))].sort(),
-      schools: [...new Set(exams.map((row) => row.school_id).filter(Boolean).map((value) => value.trim()))].sort(),
-      classSections: [
-        ...new Set(
-          exams
-            .map((row) => [row.class, row.section].filter(Boolean).join('-'))
-            .filter(Boolean)
-        ),
-      ].sort(),
-      exams: [...new Set(exams.map((row) => row.exam_pattern).filter(Boolean).map((value) => value.trim()))].sort(),
       schoolsPerformance: visibleRows,
     });
   } catch (err) {
     console.error('getSchoolQueriesListData error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// GET /api/queries/:type/filters - lightweight dropdown data for performance lists
+export const getQueriesPerformanceFilters = async (req, res) => {
+  const { type } = req.params;
+
+  try {
+    if (!['schools', 'teachers', 'students'].includes(type)) {
+      return res.status(400).json({ error: 'Invalid query type' });
+    }
+
+    const exams = await fetchAllExams(
+      (query) => query,
+      `
+        school_id,
+        program,
+        exam_pattern,
+        class
+      `
+    );
+
+    const payload = {
+      programs: [...new Set(exams.map((row) => row.program).filter(Boolean).map((value) => value.trim()))].sort(),
+      schools: [...new Set(exams.map((row) => row.school_id).filter(Boolean).map((value) => value.trim()))].sort(),
+      classes: [...new Set(exams.map((row) => row.class).filter(Boolean).map((value) => value.trim()))].sort(),
+      exams: [...new Set(exams.map((row) => row.exam_pattern).filter(Boolean).map((value) => value.trim()))].sort(),
+    };
+
+    if (type === 'teachers') {
+      const teachersRes = await supabase
+        .from('teachers')
+        .select('id');
+
+      if (teachersRes.error) {
+        console.error('Teacher filter teacher lookup error:', { teachersRes });
+        return res.status(500).json({ error: 'Database query failed' });
+      }
+
+      const teacherRowIds = (teachersRes.data || []).map((teacher) => teacher.id);
+      let subjects = [];
+
+      if (teacherRowIds.length) {
+        const assignmentsRes = await supabase
+          .from('teacher_assignments')
+          .select('subject')
+          .in('teacher_id', teacherRowIds);
+
+        if (assignmentsRes.error) {
+          console.error('Teacher filter assignment lookup error:', { assignmentsRes });
+          return res.status(500).json({ error: 'Database query failed' });
+        }
+
+        subjects = [
+          ...new Set(
+            (assignmentsRes.data || [])
+              .map((assignment) => normalizeTeacherSubject(assignment.subject))
+              .filter(Boolean)
+          ),
+        ].sort();
+      }
+
+      payload.subjects = subjects;
+    }
+
+    return res.json(payload);
+  } catch (err) {
+    console.error('getQueriesPerformanceFilters error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -2840,7 +2945,7 @@ export const getTeacherQueriesData = async (req, res) => {
       const subjectBucket = subjectBuckets.get(subject);
       if (teacher.school_id) subjectBucket.schools.add(teacher.school_id);
       if (teacher.teacher_id) subjectBucket.teachers.add(teacher.teacher_id);
-      subjectBucket.classes.add(`${teacher.school_id || ''}|${classSection}`);
+      subjectBucket.classes.add(`${teacher.school_id || ''}|${assignment.class || ''}`);
       (studentBuckets.get(bucketKey) || new Set()).forEach((studentId) => {
         subjectBucket.students.add(studentId);
       });
@@ -2871,13 +2976,13 @@ export const getTeacherQueriesData = async (req, res) => {
   }
 };
 
-// GET /api/queries/teachers/list?program=...&school=...&class_section=...&exam=...&subject=...
+// GET /api/queries/teachers/list?program=...&school=...&class=...&exam=...&subject=...
 export const getTeacherQueriesListData = async (req, res) => {
-  const { program, school, class_section, exam, subject } = req.query;
+  const { program, school, exam, subject } = req.query;
 
   const selectedProgram = String(program || '').trim();
   const selectedSchool = String(school || '').trim();
-  const selectedClassSection = String(class_section || '').trim();
+  const selectedClass = String(req.query.class || req.query.class_section || '').trim();
   const selectedExam = String(exam || '').trim();
   const selectedSubject = String(subject || '').trim();
 
@@ -2903,6 +3008,21 @@ export const getTeacherQueriesListData = async (req, res) => {
 
     const teachers = teachersRes.data || [];
     const teacherRowIds = teachers.map((teacher) => teacher.id);
+    const teacherSchoolIds = [...new Set(teachers.map((teacher) => teacher.school_id).filter(Boolean))];
+    let schoolNameById = new Map();
+    if (teacherSchoolIds.length) {
+      const schoolsRes = await supabase
+        .from('schools')
+        .select('school_id, school_name')
+        .in('school_id', teacherSchoolIds);
+      if (schoolsRes.error) {
+        console.error('Teacher query list school lookup error:', { schoolsRes });
+        return res.status(500).json({ error: 'Database query failed' });
+      }
+      schoolNameById = new Map(
+        (schoolsRes.data || []).map((row) => [row.school_id, row.school_name])
+      );
+    }
     let assignments = [];
 
     if (teacherRowIds.length) {
@@ -3020,6 +3140,7 @@ export const getTeacherQueriesListData = async (req, res) => {
             teacher_code: teacher.teacher_id || '',
             program: context.program || selectedProgram,
             school: context.school_id || '',
+            school_name: schoolNameById.get(context.school_id) || '',
             class: assignment.class || '',
             section: assignment.section || '',
             class_section: assignment.class_section,
@@ -3051,7 +3172,7 @@ export const getTeacherQueriesListData = async (req, res) => {
 
     const visibleRows = uniqueRows.filter((row) => {
       if (selectedSchool && row.school !== selectedSchool) return false;
-      if (selectedClassSection && row.class_section !== selectedClassSection) return false;
+      if (selectedClass && row.class !== selectedClass) return false;
       if (selectedSubject && row.subject !== selectedSubject) return false;
       return true;
     }).sort((a, b) => {
@@ -3074,6 +3195,7 @@ export const getTeacherQueriesListData = async (req, res) => {
     const filterSourceRows = rows.length ? rows : uniqueRows;
     const programs = [...new Set(exams.map((row) => row.program).filter(Boolean).map((value) => value.trim()))].sort();
     const schools = [...new Set(filterSourceRows.map((row) => row.school).filter(Boolean))].sort();
+    const classes = [...new Set(filterSourceRows.map((row) => row.class).filter(Boolean))].sort();
     const classSections = [...new Set(filterSourceRows.map((row) => row.class_section).filter(Boolean))].sort();
     const examsList = [...new Set(exams.map((row) => row.exam_pattern).filter(Boolean).map((value) => value.trim()))].sort();
     const subjects = [...new Set(
@@ -3086,6 +3208,7 @@ export const getTeacherQueriesListData = async (req, res) => {
     return res.json({
       programs,
       schools,
+      classes,
       classSections,
       exams: examsList,
       subjects,
@@ -3097,12 +3220,12 @@ export const getTeacherQueriesListData = async (req, res) => {
   }
 };
 
-// GET /api/queries/students?program=...&school=...&class_section=...
+// GET /api/queries/students?program=...&school=...&class=...
 export const getStudentQueriesData = async (req, res) => {
-  const { program, school, class_section } = req.query;
+  const { program, school } = req.query;
 
   const selectedProgram = String(program || '').trim();
-  const selectedClassSection = class_section ? class_section.trim() : null;
+  const selectedClass = String(req.query.class || req.query.class_section || '').trim();
   const ROW_LIMIT = 10000;
 
   try {
@@ -3131,18 +3254,17 @@ export const getStudentQueriesData = async (req, res) => {
 
     let classRows = classesRes.data || [];
 
-    const allClassSections = [
+    const allClasses = [
       ...new Set(
         classRows
-          .map((row) => [row.class, row.section].filter(Boolean).join('-'))
+          .map((row) => row.class)
           .filter((value) => value && value.trim() !== '')
       ),
     ].sort();
 
-    if (selectedClassSection) {
+    if (selectedClass) {
       classRows = classRows.filter(
-        (row) =>
-          [row.class, row.section].filter(Boolean).join('-') === selectedClassSection
+        (row) => row.class === selectedClass
       );
     }
 
@@ -3154,21 +3276,21 @@ export const getStudentQueriesData = async (req, res) => {
       ),
     ].sort();
 
-    const classSectionBuckets = new Map();
+    const classBuckets = new Map();
     for (const row of classRows) {
-      const classSection = [row.class, row.section].filter(Boolean).join('-') || '-';
-      if (!classSection || classSection === '-') continue;
+      const className = row.class || '-';
+      if (!className || className === '-') continue;
 
-      if (!classSectionBuckets.has(classSection)) {
-        classSectionBuckets.set(classSection, {
-          classSection,
+      if (!classBuckets.has(className)) {
+        classBuckets.set(className, {
+          className,
           schools: new Set(),
           students: new Set(),
           exams: new Set()
         });
       }
 
-      const bucket = classSectionBuckets.get(classSection);
+      const bucket = classBuckets.get(className);
       if (row.school_id) bucket.schools.add(row.school_id);
     }
 
@@ -3185,36 +3307,38 @@ export const getStudentQueriesData = async (req, res) => {
       }
 
       for (const row of studentsRes.data || []) {
-        const classSection = [row.class, row.section].filter(Boolean).join('-') || '-';
-        const bucket = classSectionBuckets.get(classSection);
+        const className = row.class || '-';
+        const bucket = classBuckets.get(className);
         if (!bucket) continue;
 
         const studentId = row.student_id || row.roll_no;
-        if (studentId) bucket.students.add(`${row.school_id || ''}|${classSection}|${studentId}`);
+        if (studentId) bucket.students.add(`${row.school_id || ''}|${className}|${studentId}`);
       }
     }
 
     for (const row of examsRes.data || []) {
-      const classSection = [row.class, row.section].filter(Boolean).join('-') || '-';
-      const bucket = classSectionBuckets.get(classSection);
+      const className = row.class || '-';
+      const bucket = classBuckets.get(className);
       if (!bucket) continue;
 
       if (row.exam_pattern) bucket.exams.add(row.exam_pattern.trim());
-      if (row.student_id) bucket.students.add(`${row.school_id || ''}|${classSection}|${row.student_id}`);
+      if (row.student_id) bucket.students.add(`${row.school_id || ''}|${className}|${row.student_id}`);
     }
 
-    const students = [...classSectionBuckets.values()]
+    const students = [...classBuckets.values()]
       .map((bucket) => ({
-        classSection: bucket.classSection,
+        class: bucket.className,
+        classSection: bucket.className,
         schoolCount: bucket.schools.size,
         studentCount: bucket.students.size,
         examCount: bucket.exams.size,
       }))
-      .sort((a, b) => a.classSection.localeCompare(b.classSection));
+      .sort((a, b) => a.class.localeCompare(b.class));
 
     return res.json({
       schools,
-      classSections: allClassSections,
+      classes: allClasses,
+      classSections: allClasses,
       students,
     });
   } catch (err) {
@@ -3223,13 +3347,13 @@ export const getStudentQueriesData = async (req, res) => {
   }
 };
 
-// GET /api/queries/students/list?program=...&school=...&class_section=...&exam=...
+// GET /api/queries/students/list?program=...&school=...&class=...&exam=...
 export const getStudentQueriesListData = async (req, res) => {
-  const { program, school, class_section, exam } = req.query;
+  const { program, school, exam } = req.query;
 
   const selectedProgram = String(program || '').trim();
   const selectedSchool = String(school || '').trim();
-  const selectedClassSection = String(class_section || '').trim();
+  const selectedClass = String(req.query.class || req.query.class_section || '').trim();
   const selectedExam = String(exam || '').trim();
 
   try {
@@ -3261,6 +3385,19 @@ export const getStudentQueriesListData = async (req, res) => {
       return Number.isFinite(parsed) ? parsed : Infinity;
     };
 
+    const schoolIds = [...new Set(exams.map((row) => row.school_id).filter(Boolean))];
+    let schoolNameById = new Map();
+    if (schoolIds.length) {
+      const schoolsRes = await supabase
+        .from('schools')
+        .select('school_id, school_name')
+        .in('school_id', schoolIds);
+      if (schoolsRes.error) throw schoolsRes.error;
+      schoolNameById = new Map(
+        (schoolsRes.data || []).map((row) => [row.school_id, row.school_name])
+      );
+    }
+
     const studentRows = exams
       .map((row) => {
         const classSection = [row.class, row.section].filter(Boolean).join('-');
@@ -3269,6 +3406,7 @@ export const getStudentQueriesListData = async (req, res) => {
           student_code: row.student_id || '-',
           program: row.program || '',
           school: row.school_id || '',
+          school_name: schoolNameById.get(row.school_id) || '',
           class: row.class || '',
           section: row.section || '',
           class_section: classSection,
@@ -3279,7 +3417,7 @@ export const getStudentQueriesListData = async (req, res) => {
           all_india_rank: row.all_schools_rank || '-',
         };
       })
-      .filter((row) => !selectedClassSection || row.class_section === selectedClassSection)
+      .filter((row) => !selectedClass || row.class === selectedClass)
       .sort((a, b) => {
         const percentageCompare = (b.percentage ?? -Infinity) - (a.percentage ?? -Infinity);
         if (percentageCompare !== 0) return percentageCompare;
@@ -3296,6 +3434,7 @@ export const getStudentQueriesListData = async (req, res) => {
     return res.json({
       programs: [...new Set(exams.map((row) => row.program).filter(Boolean).map((value) => value.trim()))].sort(),
       schools: [...new Set(exams.map((row) => row.school_id).filter(Boolean).map((value) => value.trim()))].sort(),
+      classes: [...new Set(exams.map((row) => row.class).filter(Boolean).map((value) => value.trim()))].sort(),
       classSections: [
         ...new Set(
           exams
