@@ -6,6 +6,13 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+const schoolPerformanceCache = new Map();
+const SCHOOL_PERFORMANCE_CACHE_TTL_MS = 2 * 60 * 1000;
+const teacherPerformanceCache = new Map();
+const TEACHER_PERFORMANCE_CACHE_TTL_MS = 2 * 60 * 1000;
+const studentPerformanceCache = new Map();
+const STUDENT_PERFORMANCE_CACHE_TTL_MS = 2 * 60 * 1000;
+
 const STATES = {
   "Andhra Pradesh": "AP", "Arunachal Pradesh": "AR", "Assam": "AS", "Bihar": "BR",
   "Chhattisgarh": "CG", "Goa": "GA", "Gujarat": "GJ", "Haryana": "HR", "Himachal Pradesh": "HP",
@@ -2574,11 +2581,28 @@ export const getSchoolQueriesListData = async (req, res) => {
   const selectedProgram = String(program || '').trim();
   const selectedSchool = String(school || '').trim();
   const selectedExam = String(exam || '').trim();
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+  const cacheKey = JSON.stringify({
+    program: selectedProgram,
+    school: selectedSchool,
+    class: selectedClass,
+    exam: selectedExam,
+    page,
+    limit,
+  });
+  const cached = schoolPerformanceCache.get(cacheKey);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return res.json(cached.payload);
+  }
 
   try {
     const exams = await fetchAllExams(
       (query) => {
         if (selectedProgram) query = query.eq('program', selectedProgram);
+        if (selectedSchool) query = query.eq('school_id', selectedSchool);
+        if (selectedClass) query = query.eq('class', selectedClass);
         if (selectedExam) query = query.eq('exam_pattern', selectedExam);
         return query;
       },
@@ -2595,15 +2619,28 @@ export const getSchoolQueriesListData = async (req, res) => {
 
     const schoolIds = [...new Set(exams.map((row) => row.school_id).filter(Boolean))];
     let schoolNameById = new Map();
+    let schoolAreaById = new Map();
     if (schoolIds.length) {
-      const schoolsRes = await supabase
+      const [schoolsRes, schoolListRes] = await Promise.all([
+        supabase
         .from('schools')
-        .select('school_id, school_name')
-        .in('school_id', schoolIds);
+        .select('school_id, school_name, area')
+          .in('school_id', schoolIds),
+        supabase
+          .from('school_list')
+          .select('school_id, school_name, area')
+          .in('school_id', schoolIds),
+      ]);
       if (schoolsRes.error) throw schoolsRes.error;
-      schoolNameById = new Map(
-        (schoolsRes.data || []).map((row) => [row.school_id, row.school_name])
-      );
+      if (schoolListRes.error) throw schoolListRes.error;
+      [...(schoolListRes.data || []), ...(schoolsRes.data || [])].forEach((row) => {
+        if (row.school_id && row.school_name && !schoolNameById.has(row.school_id)) {
+          schoolNameById.set(row.school_id, row.school_name);
+        }
+        if (row.school_id && row.area && !schoolAreaById.has(row.school_id)) {
+          schoolAreaById.set(row.school_id, row.area);
+        }
+      });
     }
 
     const buckets = new Map();
@@ -2622,6 +2659,7 @@ export const getSchoolQueriesListData = async (req, res) => {
           program: row.program || '',
           school: row.school_id || '',
           school_name: schoolNameById.get(row.school_id) || '',
+          area: schoolAreaById.get(row.school_id) || '',
           class: className,
           exam: row.exam_pattern || '',
           students: new Set(),
@@ -2645,6 +2683,7 @@ export const getSchoolQueriesListData = async (req, res) => {
       program: bucket.program,
       school: bucket.school,
       school_name: bucket.school_name,
+      area: bucket.area,
       class: bucket.class,
       exam: bucket.exam,
       total_students: bucket.students.size,
@@ -2712,9 +2751,26 @@ export const getSchoolQueriesListData = async (req, res) => {
       );
     });
 
-    return res.json({
-      schoolsPerformance: visibleRows,
+    const total = visibleRows.length;
+    const totalPages = total > 0 ? Math.ceil(total / limit) : 0;
+    const start = (page - 1) * limit;
+    const schoolsPerformance = visibleRows.slice(start, start + limit);
+    const payload = {
+      schoolsPerformance,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+      },
+    };
+
+    schoolPerformanceCache.set(cacheKey, {
+      expiresAt: Date.now() + SCHOOL_PERFORMANCE_CACHE_TTL_MS,
+      payload,
     });
+
+    return res.json(payload);
   } catch (err) {
     console.error('getSchoolQueriesListData error:', err);
     return res.status(500).json({ error: 'Internal server error' });
@@ -2985,16 +3041,35 @@ export const getTeacherQueriesListData = async (req, res) => {
   const selectedClass = String(req.query.class || req.query.class_section || '').trim();
   const selectedExam = String(exam || '').trim();
   const selectedSubject = String(subject || '').trim();
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+  const cacheKey = JSON.stringify({
+    program: selectedProgram,
+    school: selectedSchool,
+    class: selectedClass,
+    exam: selectedExam,
+    subject: selectedSubject,
+    page,
+    limit,
+  });
+  const cached = teacherPerformanceCache.get(cacheKey);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return res.json(cached.payload);
+  }
 
   try {
     let teachersQuery = supabase
       .from('teachers')
       .select('id, teacher_id, name, school_id');
+    if (selectedSchool) teachersQuery = teachersQuery.eq('school_id', selectedSchool);
 
     let classesQuery = supabase
       .from('classes')
       .select('school_id, class, section, program');
     if (selectedProgram) classesQuery = classesQuery.eq('program', selectedProgram);
+    if (selectedSchool) classesQuery = classesQuery.eq('school_id', selectedSchool);
+    if (selectedClass) classesQuery = classesQuery.eq('class', selectedClass);
 
     const [teachersRes, classesRes] = await Promise.all([
       teachersQuery,
@@ -3010,26 +3085,46 @@ export const getTeacherQueriesListData = async (req, res) => {
     const teacherRowIds = teachers.map((teacher) => teacher.id);
     const teacherSchoolIds = [...new Set(teachers.map((teacher) => teacher.school_id).filter(Boolean))];
     let schoolNameById = new Map();
+    let schoolAreaById = new Map();
     if (teacherSchoolIds.length) {
-      const schoolsRes = await supabase
-        .from('schools')
-        .select('school_id, school_name')
-        .in('school_id', teacherSchoolIds);
+      const [schoolsRes, schoolListRes] = await Promise.all([
+        supabase
+          .from('schools')
+          .select('school_id, school_name, area')
+          .in('school_id', teacherSchoolIds),
+        supabase
+          .from('school_list')
+          .select('school_id, school_name, area')
+          .in('school_id', teacherSchoolIds),
+      ]);
       if (schoolsRes.error) {
         console.error('Teacher query list school lookup error:', { schoolsRes });
         return res.status(500).json({ error: 'Database query failed' });
       }
-      schoolNameById = new Map(
-        (schoolsRes.data || []).map((row) => [row.school_id, row.school_name])
-      );
+      if (schoolListRes.error) {
+        console.error('Teacher query list school list lookup error:', { schoolListRes });
+        return res.status(500).json({ error: 'Database query failed' });
+      }
+      [...(schoolListRes.data || []), ...(schoolsRes.data || [])].forEach((row) => {
+        if (row.school_id && row.school_name && !schoolNameById.has(row.school_id)) {
+          schoolNameById.set(row.school_id, row.school_name);
+        }
+        if (row.school_id && row.area && !schoolAreaById.has(row.school_id)) {
+          schoolAreaById.set(row.school_id, row.area);
+        }
+      });
     }
     let assignments = [];
 
     if (teacherRowIds.length) {
-      const assignmentsRes = await supabase
+      let assignmentsQuery = supabase
         .from('teacher_assignments')
         .select('teacher_id, class, section, subject')
         .in('teacher_id', teacherRowIds);
+      if (selectedClass) assignmentsQuery = assignmentsQuery.eq('class', selectedClass);
+      if (selectedSubject) assignmentsQuery = assignmentsQuery.eq('subject', selectedSubject);
+
+      const assignmentsRes = await assignmentsQuery;
 
       if (assignmentsRes.error) {
         console.error('Teacher query list assignment error:', { assignmentsRes });
@@ -3039,7 +3134,13 @@ export const getTeacherQueriesListData = async (req, res) => {
     }
 
     const exams = await fetchAllExams(
-      (query) => (selectedProgram ? query.eq('program', selectedProgram) : query),
+      (query) => {
+        if (selectedProgram) query = query.eq('program', selectedProgram);
+        if (selectedSchool) query = query.eq('school_id', selectedSchool);
+        if (selectedClass) query = query.eq('class', selectedClass);
+        if (selectedExam) query = query.eq('exam_pattern', selectedExam);
+        return query;
+      },
       `
         school_id,
         program,
@@ -3107,33 +3208,6 @@ export const getTeacherQueriesListData = async (req, res) => {
           const average = context[assignment.subject];
           if (!Number.isFinite(average)) return;
 
-          const comparisonRows = [];
-          teachers.forEach((comparisonTeacher) => {
-            (assignmentsByTeacher.get(comparisonTeacher.id) || []).forEach((comparisonAssignment) => {
-              if (
-                comparisonAssignment.class_section !== assignment.class_section ||
-                comparisonAssignment.subject !== assignment.subject
-              ) {
-                return;
-              }
-
-              averageLookup.forEach((comparison) => {
-                if (
-                  comparison.school_id !== comparisonTeacher.school_id ||
-                  comparison.exam_pattern !== context.exam_pattern ||
-                  comparison.class_section !== assignment.class_section
-                ) {
-                  return;
-                }
-
-                const comparisonAverage = comparison[assignment.subject];
-                if (Number.isFinite(comparisonAverage)) {
-                  comparisonRows.push({ average: comparisonAverage });
-                }
-              });
-            });
-          });
-
           const studentsKey = `${context.school_id || ''}|${assignment.class_section}|${context.exam_pattern || ''}`;
           rows.push({
             teacher_name: teacher.name || '',
@@ -3141,6 +3215,7 @@ export const getTeacherQueriesListData = async (req, res) => {
             program: context.program || selectedProgram,
             school: context.school_id || '',
             school_name: schoolNameById.get(context.school_id) || '',
+            area: schoolAreaById.get(context.school_id) || '',
             class: assignment.class || '',
             section: assignment.section || '',
             class_section: assignment.class_section,
@@ -3148,7 +3223,7 @@ export const getTeacherQueriesListData = async (req, res) => {
             exam: context.exam_pattern || '',
             total_students: (studentBuckets.get(studentsKey) || new Set()).size,
             average_percent: Number(average.toFixed(2)),
-            all_india_rank: calculateDenseRankForAverage(comparisonRows, average),
+            all_india_rank: null,
           });
         });
       });
@@ -3169,6 +3244,30 @@ export const getTeacherQueriesListData = async (req, res) => {
         ])
       ).values()
     );
+
+    const rankGroups = new Map();
+    uniqueRows.forEach((row) => {
+      const key = `${row.exam || ''}|${row.class_section || ''}|${row.subject || ''}`;
+      if (!rankGroups.has(key)) rankGroups.set(key, []);
+      rankGroups.get(key).push(row);
+    });
+
+    rankGroups.forEach((group) => {
+      const rankedAverages = [
+        ...new Set(
+          group
+            .map((row) => Number(row.average_percent))
+            .filter((value) => Number.isFinite(value))
+        ),
+      ].sort((a, b) => b - a);
+      const rankByAverage = new Map(
+        rankedAverages.map((average, index) => [average, index + 1])
+      );
+
+      group.forEach((row) => {
+        row.all_india_rank = rankByAverage.get(Number(row.average_percent)) || null;
+      });
+    });
 
     const visibleRows = uniqueRows.filter((row) => {
       if (selectedSchool && row.school !== selectedSchool) return false;
@@ -3205,15 +3304,31 @@ export const getTeacherQueriesListData = async (req, res) => {
         .filter(Boolean)
     )].sort();
 
-    return res.json({
+    const total = visibleRows.length;
+    const totalPages = total > 0 ? Math.ceil(total / limit) : 0;
+    const start = (page - 1) * limit;
+    const payload = {
       programs,
       schools,
       classes,
       classSections,
       exams: examsList,
       subjects,
-      teachers: visibleRows,
+      teachers: visibleRows.slice(start, start + limit),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+      },
+    };
+
+    teacherPerformanceCache.set(cacheKey, {
+      expiresAt: Date.now() + TEACHER_PERFORMANCE_CACHE_TTL_MS,
+      payload,
     });
+
+    return res.json(payload);
   } catch (err) {
     console.error('getTeacherQueriesListData error:', err);
     return res.status(500).json({ error: 'Internal server error' });
@@ -3355,12 +3470,28 @@ export const getStudentQueriesListData = async (req, res) => {
   const selectedSchool = String(school || '').trim();
   const selectedClass = String(req.query.class || req.query.class_section || '').trim();
   const selectedExam = String(exam || '').trim();
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+  const cacheKey = JSON.stringify({
+    program: selectedProgram,
+    school: selectedSchool,
+    class: selectedClass,
+    exam: selectedExam,
+    page,
+    limit,
+  });
+  const cached = studentPerformanceCache.get(cacheKey);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return res.json(cached.payload);
+  }
 
   try {
     const exams = await fetchAllExams(
       (query) => {
         if (selectedProgram) query = query.eq('program', selectedProgram);
         if (selectedSchool) query = query.eq('school_id', selectedSchool);
+        if (selectedClass) query = query.eq('class', selectedClass);
         if (selectedExam) query = query.eq('exam_pattern', selectedExam);
         return query;
       },
@@ -3385,19 +3516,6 @@ export const getStudentQueriesListData = async (req, res) => {
       return Number.isFinite(parsed) ? parsed : Infinity;
     };
 
-    const schoolIds = [...new Set(exams.map((row) => row.school_id).filter(Boolean))];
-    let schoolNameById = new Map();
-    if (schoolIds.length) {
-      const schoolsRes = await supabase
-        .from('schools')
-        .select('school_id, school_name')
-        .in('school_id', schoolIds);
-      if (schoolsRes.error) throw schoolsRes.error;
-      schoolNameById = new Map(
-        (schoolsRes.data || []).map((row) => [row.school_id, row.school_name])
-      );
-    }
-
     const studentRows = exams
       .map((row) => {
         const classSection = [row.class, row.section].filter(Boolean).join('-');
@@ -3406,7 +3524,8 @@ export const getStudentQueriesListData = async (req, res) => {
           student_code: row.student_id || '-',
           program: row.program || '',
           school: row.school_id || '',
-          school_name: schoolNameById.get(row.school_id) || '',
+          school_name: '',
+          area: '',
           class: row.class || '',
           section: row.section || '',
           class_section: classSection,
@@ -3417,7 +3536,6 @@ export const getStudentQueriesListData = async (req, res) => {
           all_india_rank: row.all_schools_rank || '-',
         };
       })
-      .filter((row) => !selectedClass || row.class === selectedClass)
       .sort((a, b) => {
         const percentageCompare = (b.percentage ?? -Infinity) - (a.percentage ?? -Infinity);
         if (percentageCompare !== 0) return percentageCompare;
@@ -3430,8 +3548,43 @@ export const getStudentQueriesListData = async (req, res) => {
 
         return a.student_name.localeCompare(b.student_name);
       });
+    const total = studentRows.length;
+    const totalPages = total > 0 ? Math.ceil(total / limit) : 0;
+    const start = (page - 1) * limit;
+    const paginatedRows = studentRows.slice(start, start + limit);
+    const schoolIds = [...new Set(paginatedRows.map((row) => row.school).filter(Boolean))];
+    const schoolNameById = new Map();
+    const schoolAreaById = new Map();
 
-    return res.json({
+    if (schoolIds.length) {
+      const [schoolsRes, schoolListRes] = await Promise.all([
+        supabase
+          .from('schools')
+          .select('school_id, school_name, area')
+          .in('school_id', schoolIds),
+        supabase
+          .from('school_list')
+          .select('school_id, school_name, area')
+          .in('school_id', schoolIds),
+      ]);
+      if (schoolsRes.error) throw schoolsRes.error;
+      if (schoolListRes.error) throw schoolListRes.error;
+      [...(schoolListRes.data || []), ...(schoolsRes.data || [])].forEach((row) => {
+        if (row.school_id && row.school_name && !schoolNameById.has(row.school_id)) {
+          schoolNameById.set(row.school_id, row.school_name);
+        }
+        if (row.school_id && row.area && !schoolAreaById.has(row.school_id)) {
+          schoolAreaById.set(row.school_id, row.area);
+        }
+      });
+    }
+
+    const students = paginatedRows.map((row) => ({
+      ...row,
+      school_name: schoolNameById.get(row.school) || '',
+      area: schoolAreaById.get(row.school) || '',
+    }));
+    const payload = {
       programs: [...new Set(exams.map((row) => row.program).filter(Boolean).map((value) => value.trim()))].sort(),
       schools: [...new Set(exams.map((row) => row.school_id).filter(Boolean).map((value) => value.trim()))].sort(),
       classes: [...new Set(exams.map((row) => row.class).filter(Boolean).map((value) => value.trim()))].sort(),
@@ -3443,8 +3596,21 @@ export const getStudentQueriesListData = async (req, res) => {
         ),
       ].sort(),
       exams: [...new Set(exams.map((row) => row.exam_pattern).filter(Boolean).map((value) => value.trim()))].sort(),
-      students: studentRows,
+      students,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+      },
+    };
+
+    studentPerformanceCache.set(cacheKey, {
+      expiresAt: Date.now() + STUDENT_PERFORMANCE_CACHE_TTL_MS,
+      payload,
     });
+
+    return res.json(payload);
   } catch (err) {
     console.error('getStudentQueriesListData error:', err);
     return res.status(500).json({ error: 'Internal server error' });
